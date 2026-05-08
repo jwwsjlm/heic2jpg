@@ -148,6 +148,12 @@ func main() {
 					progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
 					continue
 				}
+				if err := preserveFileTimes(j.src, j.dst); err != nil {
+					failCount.Add(1)
+					failures.add(fmt.Sprintf("%s -> JPG 已生成，但同步文件修改时间失败: %v", j.src, err))
+					progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
+					continue
+				}
 				successes.add(j.src)
 				okCount.Add(1)
 				progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
@@ -726,6 +732,15 @@ func writeFailureLog(messages []string) (string, error) {
 		return name, nil
 	}
 	return abs, nil
+}
+
+func preserveFileTimes(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	modTime := info.ModTime()
+	return os.Chtimes(dst, modTime, modTime)
 }
 
 func outputPath(src string) string {
