@@ -10,27 +10,38 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 type config struct {
-	input       string
-	outputDir   string
-	recursive   bool
-	overwrite   bool
-	keepName    bool
+	input     string
+	recursive bool
+	overwrite bool
+	level     int
+	workers   int
+}
+
+type jpgOptions struct {
 	quality     int
 	keepMeta    bool
 	progressive bool
 }
 
-var stdinReader = bufio.NewReader(os.Stdin)
-
 type converter struct {
 	name string
-	run  func(src, dst string, cfg *config) error
+	run  func(src, dst string, opt jpgOptions) error
 }
+
+type job struct {
+	src string
+	dst string
+}
+
+var stdinReader = bufio.NewReader(os.Stdin)
 
 func main() {
 	cfg, err := parseFlags()
@@ -38,12 +49,14 @@ func main() {
 		log.Fatalf("参数错误: %v", err)
 	}
 
+	opt := levelToJPGOptions(cfg.level)
+
 	conv, err := detectConverter()
 	if err != nil {
 		log.Fatalf("未找到可用 HEIC 转换器: %v\n\n请先安装以下任意一种工具：\n1. ImageMagick（magick）\n2. libheif-tools（heif-convert）", err)
 	}
 
-	files, rootBase, err := collectHEICFiles(cfg.input, cfg.recursive)
+	files, err := collectHEICFiles(cfg.input, cfg.recursive)
 	if err != nil {
 		log.Fatalf("扫描输入失败: %v", err)
 	}
@@ -51,49 +64,66 @@ func main() {
 		log.Fatalf("没有找到 HEIC/HEIF 文件: %s", cfg.input)
 	}
 
-	if cfg.outputDir != "" {
-		if err := os.MkdirAll(cfg.outputDir, 0o755); err != nil {
-			log.Fatalf("创建输出目录失败: %v", err)
-		}
+	jobs := make([]job, 0, len(files))
+	for _, src := range files {
+		jobs = append(jobs, job{src: src, dst: outputPath(src)})
 	}
 
-	var okCount, skipCount, failCount int
-	for _, src := range files {
-		dst, err := buildOutputPath(src, rootBase, cfg)
-		if err != nil {
-			log.Printf("[FAIL] %s -> 构造输出路径失败: %v", src, err)
-			failCount++
-			continue
-		}
-
-		if !cfg.overwrite {
-			if _, err := os.Stat(dst); err == nil {
-				log.Printf("[SKIP] %s -> %s 已存在", src, dst)
-				skipCount++
-				continue
-			}
-		}
-
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			log.Printf("[FAIL] %s -> 创建目录失败: %v", src, err)
-			failCount++
-			continue
-		}
-
-		log.Printf("[DO]   %s -> %s", src, dst)
-		if err := conv.run(src, dst, cfg); err != nil {
-			log.Printf("[FAIL] %s -> %v", src, err)
-			failCount++
-			continue
-		}
-		okCount++
+	workerCount := cfg.workers
+	if workerCount <= 0 {
+		workerCount = runtime.NumCPU()
+	}
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > len(jobs) {
+		workerCount = len(jobs)
 	}
 
 	fmt.Println("------------------------------")
 	fmt.Printf("转换器: %s\n", conv.name)
-	fmt.Printf("JPG 参数: quality=%d, keep-meta=%v, progressive=%v\n", cfg.quality, cfg.keepMeta, cfg.progressive)
-	fmt.Printf("总数: %d, 成功: %d, 跳过: %d, 失败: %d\n", len(files), okCount, skipCount, failCount)
-	if failCount > 0 {
+	fmt.Printf("等级: %d/10 -> JPG quality=%d, keep-meta=%v, progressive=%v\n", cfg.level, opt.quality, opt.keepMeta, opt.progressive)
+	fmt.Printf("并发线程: %d，任务数: %d\n", workerCount, len(jobs))
+	fmt.Println("输出规则: 原目录，同文件名，后缀改为 .jpg")
+	fmt.Println("------------------------------")
+
+	var okCount, skipCount, failCount atomic.Int64
+	jobCh := make(chan job)
+	var wg sync.WaitGroup
+
+	for i := 1; i <= workerCount; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for j := range jobCh {
+				if !cfg.overwrite {
+					if _, err := os.Stat(j.dst); err == nil {
+						log.Printf("[SKIP][%02d] %s -> %s 已存在", workerID, j.src, j.dst)
+						skipCount.Add(1)
+						continue
+					}
+				}
+
+				log.Printf("[DO][%02d] %s -> %s", workerID, j.src, j.dst)
+				if err := conv.run(j.src, j.dst, opt); err != nil {
+					log.Printf("[FAIL][%02d] %s -> %v", workerID, j.src, err)
+					failCount.Add(1)
+					continue
+				}
+				okCount.Add(1)
+			}
+		}(i)
+	}
+
+	for _, j := range jobs {
+		jobCh <- j
+	}
+	close(jobCh)
+	wg.Wait()
+
+	fmt.Println("------------------------------")
+	fmt.Printf("总数: %d, 成功: %d, 跳过: %d, 失败: %d\n", len(jobs), okCount.Load(), skipCount.Load(), failCount.Load())
+	if failCount.Load() > 0 {
 		os.Exit(2)
 	}
 }
@@ -101,18 +131,16 @@ func main() {
 func parseFlags() (*config, error) {
 	cfg := &config{}
 	flag.StringVar(&cfg.input, "input", "", "输入文件或目录")
-	flag.StringVar(&cfg.outputDir, "out", "", "输出目录；默认输出到源文件同目录")
 	flag.BoolVar(&cfg.recursive, "recursive", true, "输入为目录时是否递归扫描")
 	flag.BoolVar(&cfg.overwrite, "overwrite", false, "是否覆盖已存在 jpg")
-	flag.BoolVar(&cfg.keepName, "keep-name", true, "保留原文件名，仅扩展名改为 .jpg")
-	flag.IntVar(&cfg.quality, "quality", 100, "JPG 质量，范围 1-100，默认 100 最高画质")
-	flag.BoolVar(&cfg.keepMeta, "keep-meta", false, "是否保留 EXIF 等元数据；默认 false 会去除元数据以减小体积")
-	flag.BoolVar(&cfg.progressive, "progressive", false, "是否输出渐进式 JPG，适合网页加载")
+	flag.IntVar(&cfg.level, "level", 10, "转换等级，1-10；10 为最高质量/近似无损")
+	flag.IntVar(&cfg.workers, "workers", 0, "并发线程数；默认 0 表示自动使用 CPU 核心数")
 	flag.Parse()
 
 	if cfg.input == "" && flag.NArg() > 0 {
 		cfg.input = flag.Arg(0)
 	}
+
 	interactive := strings.TrimSpace(cfg.input) == ""
 	if interactive {
 		input, err := promptInputPath()
@@ -120,9 +148,12 @@ func parseFlags() (*config, error) {
 			return nil, err
 		}
 		cfg.input = input
-		if err := promptJPGOptions(cfg); err != nil {
+
+		level, err := promptLevel(cfg.level)
+		if err != nil {
 			return nil, err
 		}
+		cfg.level = level
 	}
 
 	absInput, err := filepath.Abs(cfg.input)
@@ -131,15 +162,11 @@ func parseFlags() (*config, error) {
 	}
 	cfg.input = absInput
 
-	if cfg.quality < 1 || cfg.quality > 100 {
-		return nil, fmt.Errorf("JPG 质量必须在 1-100 之间，当前是 %d", cfg.quality)
+	if cfg.level < 1 || cfg.level > 10 {
+		return nil, fmt.Errorf("转换等级必须在 1-10 之间，当前是 %d", cfg.level)
 	}
-
-	if cfg.outputDir != "" {
-		cfg.outputDir, err = filepath.Abs(cfg.outputDir)
-		if err != nil {
-			return nil, err
-		}
+	if cfg.workers < 0 {
+		return nil, fmt.Errorf("并发线程数不能小于 0，当前是 %d", cfg.workers)
 	}
 
 	return cfg, nil
@@ -163,67 +190,30 @@ func promptInputPath() (string, error) {
 	return input, nil
 }
 
-func promptJPGOptions(cfg *config) error {
+func promptLevel(defaultLevel int) (int, error) {
 	fmt.Println()
-	fmt.Println("JPG 参数设置：直接回车使用默认值。")
+	fmt.Println("请输入转换等级 1-10，然后按回车。")
+	fmt.Println("1 = 文件更小，10 = 最高画质/近似无损")
 
-	qualityText, err := promptLine(fmt.Sprintf("JPG 质量 1-100 [%d]: ", cfg.quality))
+	text, err := promptLine(fmt.Sprintf("等级 [%d]: ", defaultLevel))
 	if err != nil {
-		return err
+		return 0, err
 	}
-	qualityText = strings.TrimSpace(qualityText)
-	if qualityText != "" {
-		var quality int
-		if _, err := fmt.Sscanf(qualityText, "%d", &quality); err != nil {
-			return fmt.Errorf("JPG 质量不是有效数字: %s", qualityText)
-		}
-		cfg.quality = quality
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return defaultLevel, nil
 	}
 
-	keepMetaText, err := promptLine("保留 EXIF 等元数据？y/N: ")
-	if err != nil {
-		return err
+	var level int
+	if _, err := fmt.Sscanf(text, "%d", &level); err != nil {
+		return 0, fmt.Errorf("等级不是有效数字: %s", text)
 	}
-	cfg.keepMeta = parseYesNo(keepMetaText, cfg.keepMeta)
-
-	progressiveText, err := promptLine("输出渐进式 JPG？y/N: ")
-	if err != nil {
-		return err
-	}
-	cfg.progressive = parseYesNo(progressiveText, cfg.progressive)
-
-	outputText, err := promptLine("输出目录，留空表示源文件同目录: ")
-	if err != nil {
-		return err
-	}
-	if output := cleanInputPath(outputText); output != "" {
-		cfg.outputDir = output
-	}
-
-	overwriteText, err := promptLine("覆盖已存在 JPG？y/N: ")
-	if err != nil {
-		return err
-	}
-	cfg.overwrite = parseYesNo(overwriteText, cfg.overwrite)
-
-	return nil
+	return level, nil
 }
 
 func promptLine(label string) (string, error) {
 	fmt.Print(label)
 	return stdinReader.ReadString('\n')
-}
-
-func parseYesNo(input string, defaultValue bool) bool {
-	input = strings.ToLower(strings.TrimSpace(input))
-	switch input {
-	case "y", "yes", "是", "对", "1", "true":
-		return true
-	case "n", "no", "否", "不", "0", "false":
-		return false
-	default:
-		return defaultValue
-	}
 }
 
 func cleanInputPath(input string) string {
@@ -234,19 +224,41 @@ func cleanInputPath(input string) string {
 	return input
 }
 
+func levelToJPGOptions(level int) jpgOptions {
+	// 1-10 映射到常用 JPG 质量区间。
+	// 10 使用 quality=100，并保留元数据，作为最高画质/近似无损输出。
+	qualityMap := map[int]int{
+		1:  55,
+		2:  65,
+		3:  72,
+		4:  78,
+		5:  84,
+		6:  88,
+		7:  92,
+		8:  95,
+		9:  98,
+		10: 100,
+	}
+	return jpgOptions{
+		quality:     qualityMap[level],
+		keepMeta:    level == 10,
+		progressive: level <= 8,
+	}
+}
+
 func detectConverter() (*converter, error) {
 	if path, err := exec.LookPath("magick"); err == nil {
 		return &converter{
 			name: "ImageMagick: " + path,
-			run: func(src, dst string, cfg *config) error {
+			run: func(src, dst string, opt jpgOptions) error {
 				args := []string{src, "-auto-orient"}
-				if !cfg.keepMeta {
+				if !opt.keepMeta {
 					args = append(args, "-strip")
 				}
-				if cfg.progressive {
+				if opt.progressive {
 					args = append(args, "-interlace", "JPEG")
 				}
-				args = append(args, "-quality", fmt.Sprintf("%d", cfg.quality), dst)
+				args = append(args, "-quality", fmt.Sprintf("%d", opt.quality), dst)
 				cmd := exec.Command("magick", args...)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
@@ -260,8 +272,8 @@ func detectConverter() (*converter, error) {
 	if path, err := exec.LookPath("heif-convert"); err == nil {
 		return &converter{
 			name: "libheif-tools: " + path,
-			run: func(src, dst string, cfg *config) error {
-				cmd := exec.Command("heif-convert", "-q", fmt.Sprintf("%d", cfg.quality), src, dst)
+			run: func(src, dst string, opt jpgOptions) error {
+				cmd := exec.Command("heif-convert", "-q", fmt.Sprintf("%d", opt.quality), src, dst)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("heif-convert 转换失败: %v: %s", err, strings.TrimSpace(string(out)))
@@ -274,17 +286,17 @@ func detectConverter() (*converter, error) {
 	return nil, errors.New("magick / heif-convert 都不可用")
 }
 
-func collectHEICFiles(input string, recursive bool) ([]string, string, error) {
+func collectHEICFiles(input string, recursive bool) ([]string, error) {
 	info, err := os.Stat(input)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	if !info.IsDir() {
 		if isHEIC(input) {
-			return []string{input}, filepath.Dir(input), nil
+			return []string{input}, nil
 		}
-		return nil, filepath.Dir(input), fmt.Errorf("输入文件不是 HEIC/HEIF: %s", input)
+		return nil, fmt.Errorf("输入文件不是 HEIC/HEIF: %s", input)
 	}
 
 	var files []string
@@ -305,40 +317,15 @@ func collectHEICFiles(input string, recursive bool) ([]string, string, error) {
 	}
 
 	if err := filepath.WalkDir(input, walkFn); err != nil {
-		return nil, input, err
+		return nil, err
 	}
 	sort.Strings(files)
-	return files, input, nil
+	return files, nil
 }
 
-func buildOutputPath(src, rootBase string, cfg *config) (string, error) {
+func outputPath(src string) string {
 	base := strings.TrimSuffix(filepath.Base(src), filepath.Ext(src))
-	if !cfg.keepName {
-		base = sanitizeName(base)
-	}
-	fileName := base + ".jpg"
-
-	if cfg.outputDir == "" {
-		return filepath.Join(filepath.Dir(src), fileName), nil
-	}
-
-	rel, err := filepath.Rel(rootBase, filepath.Dir(src))
-	if err != nil {
-		return "", err
-	}
-	if rel == "." {
-		return filepath.Join(cfg.outputDir, fileName), nil
-	}
-	return filepath.Join(cfg.outputDir, rel, fileName), nil
-}
-
-func sanitizeName(name string) string {
-	name = strings.TrimSpace(name)
-	name = strings.ReplaceAll(name, " ", "_")
-	if name == "" {
-		return "converted"
-	}
-	return name
+	return filepath.Join(filepath.Dir(src), base+".jpg")
 }
 
 func isHEIC(path string) bool {

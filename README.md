@@ -4,12 +4,14 @@
 
 特点：
 
-- 支持输入单个文件或目录
-- 输入目录时默认递归遍历
-- 自动识别 `.heic` / `.heif`，大小写不敏感
-- 输出最高画质 JPG
-- 默认不覆盖已有文件
-- 可指定输出目录，并保留原目录结构
+- 直接运行后输入文件夹路径即可使用
+- 只需要输入 1-10 转换等级
+- 自动遍历 `.heic` / `.heif`，大小写不敏感
+- 默认递归扫描子目录
+- 自动按 CPU 核心数多线程转换
+- 输出到原文件所在目录
+- 自动保留原文件名，仅后缀改成 `.jpg`
+- 默认不覆盖已有 JPG
 
 ## 依赖
 
@@ -49,9 +51,7 @@ go build -o heic2jpg .
 
 ## 使用
 
-### 方式一：直接运行后输入路径
-
-直接运行程序：
+### 方式一：直接运行
 
 ```bash
 ./heic2jpg
@@ -63,22 +63,24 @@ go build -o heic2jpg .
 请输入要转换的文件夹或文件路径，然后按回车。
 路径:
 
-JPG 参数设置：直接回车使用默认值。
-JPG 质量 1-100 [100]:
-保留 EXIF 等元数据？y/N:
-输出渐进式 JPG？y/N:
-输出目录，留空表示源文件同目录:
-覆盖已存在 JPG？y/N:
+请输入转换等级 1-10，然后按回车。
+1 = 文件更小，10 = 最高画质/近似无损
+等级 [10]:
 ```
 
-把文件夹路径粘贴进去即可。也可以把文件夹/文件直接拖到窗口里，再按回车。
+把文件夹路径粘贴进去即可，也可以把文件夹/文件直接拖到窗口里，再按回车。
 
-默认参数是最高画质 JPG：`quality=100`，不保留 EXIF，不输出渐进式 JPG，不覆盖已有文件。
+等级建议：
+
+- `10`：最高画质/近似无损，适合照片归档
+- `8-9`：高画质，体积比 10 小
+- `5-7`：日常分享，体积更小
+- `1-4`：优先压缩体积
 
 ### 方式二：命令行参数
 
 ```bash
-# 转换目录，默认递归扫描
+# 转换目录，默认递归扫描，等级默认 10
 ./heic2jpg -input /path/to/photos
 
 # 也可以直接把路径作为第一个参数
@@ -87,40 +89,30 @@ JPG 质量 1-100 [100]:
 # 转换单个文件
 ./heic2jpg /path/to/IMG_0001.HEIC
 
-# 输出到指定目录，保留原目录结构
-./heic2jpg -input /path/to/photos -out /path/to/jpg-output
-
-# 设置 JPG 质量，范围 1-100，默认 100
-./heic2jpg -input /path/to/photos -quality 95
-
-# 保留 EXIF 等元数据
-./heic2jpg -input /path/to/photos -keep-meta
-
-# 输出渐进式 JPG，适合网页展示
-./heic2jpg -input /path/to/photos -progressive
+# 设置转换等级
+./heic2jpg -input /path/to/photos -level 8
 
 # 覆盖已有 jpg
 ./heic2jpg -input /path/to/photos -overwrite
 
 # 只扫描当前目录，不递归子目录
 ./heic2jpg -input /path/to/photos -recursive=false
+
+# 手动指定并发线程数；默认自动使用 CPU 核心数
+./heic2jpg -input /path/to/photos -workers 4
 ```
 
-## 示例
+## 输出规则
+
+输出文件固定在原文件所在目录，文件名保持不变，只把扩展名改为 `.jpg`：
 
 ```text
 IMG_001.HEIC -> IMG_001.jpg
 IMG_002.heif -> IMG_002.jpg
 ```
 
-如果指定输出目录：
+如果目录里已经有同名 JPG，默认跳过。需要覆盖时使用：
 
 ```bash
-./heic2jpg -input ./photos -out ./jpg-output
-```
-
-目录结构会被保留：
-
-```text
-photos/a/IMG_001.HEIC -> jpg-output/a/IMG_001.jpg
+./heic2jpg -input /path/to/photos -overwrite
 ```
