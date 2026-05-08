@@ -53,7 +53,7 @@ func main() {
 
 	conv, err := detectConverter()
 	if err != nil {
-		log.Fatalf("未找到可用 HEIC 转换器: %v\n\n请先安装以下任意一种工具：\n1. ImageMagick（magick）\n2. libheif-tools（heif-convert）", err)
+		log.Fatalf("%s", converterInstallHelp(err))
 	}
 
 	files, err := collectHEICFiles(cfg.input, cfg.recursive)
@@ -283,7 +283,43 @@ func detectConverter() (*converter, error) {
 		}, nil
 	}
 
-	return nil, errors.New("magick / heif-convert 都不可用")
+	if path, err := exec.LookPath("sips"); err == nil {
+		return &converter{
+			name: "macOS sips: " + path,
+			run: func(src, dst string, opt jpgOptions) error {
+				cmd := exec.Command("sips", "-s", "format", "jpeg", "-s", "formatOptions", fmt.Sprintf("%d", opt.quality), src, "--out", dst)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					return fmt.Errorf("sips 转换失败: %v: %s", err, strings.TrimSpace(string(out)))
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	return nil, errors.New("magick / heif-convert / sips 都不可用")
+}
+
+func converterInstallHelp(err error) string {
+	return fmt.Sprintf(`未找到可用 HEIC 转换器: %v
+
+请按你的系统安装以下任意一种：
+
+Ubuntu / Debian:
+  sudo apt update && sudo apt install -y imagemagick
+
+或者：
+  sudo apt update && sudo apt install -y libheif-examples
+
+macOS:
+  通常系统自带 sips，不需要安装。
+  如果仍然报错，可以安装 ImageMagick：
+  brew install imagemagick
+
+Windows:
+  推荐安装 ImageMagick，并确保 magick.exe 已加入 PATH。
+  https://imagemagick.org/script/download.php#windows
+`, err)
 }
 
 func collectHEICFiles(input string, recursive bool) ([]string, error) {

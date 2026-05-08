@@ -31,6 +31,10 @@ sudo apt install libheif-examples
 
 ### macOS
 
+macOS 通常自带 `sips`，可以直接转换 HEIC。
+
+如果你的系统没有 `sips` 或转换失败，可以安装 ImageMagick：
+
 ```bash
 brew install imagemagick
 ```
@@ -41,7 +45,7 @@ brew install imagemagick
 brew install libheif
 ```
 
-程序会优先使用 `magick`，找不到时自动尝试 `heif-convert`。
+程序会优先使用 `magick`，找不到时自动尝试 `heif-convert`，macOS 上还会自动尝试系统自带的 `sips`。
 
 ## 编译
 
