@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -104,7 +105,11 @@ func parseFlags() (*config, error) {
 		cfg.input = flag.Arg(0)
 	}
 	if strings.TrimSpace(cfg.input) == "" {
-		return nil, errors.New("请提供 -input <文件或目录>，也可以直接把路径作为第一个参数")
+		input, err := promptInputPath()
+		if err != nil {
+			return nil, err
+		}
+		cfg.input = input
 	}
 
 	absInput, err := filepath.Abs(cfg.input)
@@ -121,6 +126,34 @@ func parseFlags() (*config, error) {
 	}
 
 	return cfg, nil
+}
+
+func promptInputPath() (string, error) {
+	fmt.Println("HEIC/HEIF 批量转 JPG 工具")
+	fmt.Println("--------------------------------")
+	fmt.Println("请输入要转换的文件夹或文件路径，然后按回车。")
+	fmt.Println("提示：可以直接拖拽文件夹/文件到这个窗口里。")
+	fmt.Print("路径: ")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+
+	input = cleanInputPath(input)
+	if input == "" {
+		return "", errors.New("没有输入路径")
+	}
+	return input, nil
+}
+
+func cleanInputPath(input string) string {
+	input = strings.TrimSpace(input)
+	input = strings.Trim(input, "\"'")
+	// Some terminals escape spaces when users drag paths in, e.g. /a/b/My\ Photos.
+	input = strings.ReplaceAll(input, `\ `, " ")
+	return input
 }
 
 func detectConverter() (*converter, error) {
