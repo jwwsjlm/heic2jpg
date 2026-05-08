@@ -1,0 +1,4 @@
+/heic2jpg
+*.jpg
+*.jpeg
+.DS_Store
