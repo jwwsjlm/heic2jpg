@@ -62,9 +62,18 @@ go build -o heic2jpg .
 ```text
 请输入要转换的文件夹或文件路径，然后按回车。
 路径:
+
+JPG 参数设置：直接回车使用默认值。
+JPG 质量 1-100 [100]:
+保留 EXIF 等元数据？y/N:
+输出渐进式 JPG？y/N:
+输出目录，留空表示源文件同目录:
+覆盖已存在 JPG？y/N:
 ```
 
 把文件夹路径粘贴进去即可。也可以把文件夹/文件直接拖到窗口里，再按回车。
+
+默认参数是最高画质 JPG：`quality=100`，不保留 EXIF，不输出渐进式 JPG，不覆盖已有文件。
 
 ### 方式二：命令行参数
 
@@ -80,6 +89,15 @@ go build -o heic2jpg .
 
 # 输出到指定目录，保留原目录结构
 ./heic2jpg -input /path/to/photos -out /path/to/jpg-output
+
+# 设置 JPG 质量，范围 1-100，默认 100
+./heic2jpg -input /path/to/photos -quality 95
+
+# 保留 EXIF 等元数据
+./heic2jpg -input /path/to/photos -keep-meta
+
+# 输出渐进式 JPG，适合网页展示
+./heic2jpg -input /path/to/photos -progressive
 
 # 覆盖已有 jpg
 ./heic2jpg -input /path/to/photos -overwrite

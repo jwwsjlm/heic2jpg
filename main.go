@@ -15,16 +15,21 @@ import (
 )
 
 type config struct {
-	input     string
-	outputDir string
-	recursive bool
-	overwrite bool
-	keepName  bool
+	input       string
+	outputDir   string
+	recursive   bool
+	overwrite   bool
+	keepName    bool
+	quality     int
+	keepMeta    bool
+	progressive bool
 }
+
+var stdinReader = bufio.NewReader(os.Stdin)
 
 type converter struct {
 	name string
-	run  func(src, dst string) error
+	run  func(src, dst string, cfg *config) error
 }
 
 func main() {
@@ -76,7 +81,7 @@ func main() {
 		}
 
 		log.Printf("[DO]   %s -> %s", src, dst)
-		if err := conv.run(src, dst); err != nil {
+		if err := conv.run(src, dst, cfg); err != nil {
 			log.Printf("[FAIL] %s -> %v", src, err)
 			failCount++
 			continue
@@ -86,6 +91,7 @@ func main() {
 
 	fmt.Println("------------------------------")
 	fmt.Printf("转换器: %s\n", conv.name)
+	fmt.Printf("JPG 参数: quality=%d, keep-meta=%v, progressive=%v\n", cfg.quality, cfg.keepMeta, cfg.progressive)
 	fmt.Printf("总数: %d, 成功: %d, 跳过: %d, 失败: %d\n", len(files), okCount, skipCount, failCount)
 	if failCount > 0 {
 		os.Exit(2)
@@ -99,17 +105,24 @@ func parseFlags() (*config, error) {
 	flag.BoolVar(&cfg.recursive, "recursive", true, "输入为目录时是否递归扫描")
 	flag.BoolVar(&cfg.overwrite, "overwrite", false, "是否覆盖已存在 jpg")
 	flag.BoolVar(&cfg.keepName, "keep-name", true, "保留原文件名，仅扩展名改为 .jpg")
+	flag.IntVar(&cfg.quality, "quality", 100, "JPG 质量，范围 1-100，默认 100 最高画质")
+	flag.BoolVar(&cfg.keepMeta, "keep-meta", false, "是否保留 EXIF 等元数据；默认 false 会去除元数据以减小体积")
+	flag.BoolVar(&cfg.progressive, "progressive", false, "是否输出渐进式 JPG，适合网页加载")
 	flag.Parse()
 
 	if cfg.input == "" && flag.NArg() > 0 {
 		cfg.input = flag.Arg(0)
 	}
-	if strings.TrimSpace(cfg.input) == "" {
+	interactive := strings.TrimSpace(cfg.input) == ""
+	if interactive {
 		input, err := promptInputPath()
 		if err != nil {
 			return nil, err
 		}
 		cfg.input = input
+		if err := promptJPGOptions(cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	absInput, err := filepath.Abs(cfg.input)
@@ -117,6 +130,10 @@ func parseFlags() (*config, error) {
 		return nil, err
 	}
 	cfg.input = absInput
+
+	if cfg.quality < 1 || cfg.quality > 100 {
+		return nil, fmt.Errorf("JPG 质量必须在 1-100 之间，当前是 %d", cfg.quality)
+	}
 
 	if cfg.outputDir != "" {
 		cfg.outputDir, err = filepath.Abs(cfg.outputDir)
@@ -133,10 +150,8 @@ func promptInputPath() (string, error) {
 	fmt.Println("--------------------------------")
 	fmt.Println("请输入要转换的文件夹或文件路径，然后按回车。")
 	fmt.Println("提示：可以直接拖拽文件夹/文件到这个窗口里。")
-	fmt.Print("路径: ")
 
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
+	input, err := promptLine("路径: ")
 	if err != nil {
 		return "", err
 	}
@@ -146,6 +161,69 @@ func promptInputPath() (string, error) {
 		return "", errors.New("没有输入路径")
 	}
 	return input, nil
+}
+
+func promptJPGOptions(cfg *config) error {
+	fmt.Println()
+	fmt.Println("JPG 参数设置：直接回车使用默认值。")
+
+	qualityText, err := promptLine(fmt.Sprintf("JPG 质量 1-100 [%d]: ", cfg.quality))
+	if err != nil {
+		return err
+	}
+	qualityText = strings.TrimSpace(qualityText)
+	if qualityText != "" {
+		var quality int
+		if _, err := fmt.Sscanf(qualityText, "%d", &quality); err != nil {
+			return fmt.Errorf("JPG 质量不是有效数字: %s", qualityText)
+		}
+		cfg.quality = quality
+	}
+
+	keepMetaText, err := promptLine("保留 EXIF 等元数据？y/N: ")
+	if err != nil {
+		return err
+	}
+	cfg.keepMeta = parseYesNo(keepMetaText, cfg.keepMeta)
+
+	progressiveText, err := promptLine("输出渐进式 JPG？y/N: ")
+	if err != nil {
+		return err
+	}
+	cfg.progressive = parseYesNo(progressiveText, cfg.progressive)
+
+	outputText, err := promptLine("输出目录，留空表示源文件同目录: ")
+	if err != nil {
+		return err
+	}
+	if output := cleanInputPath(outputText); output != "" {
+		cfg.outputDir = output
+	}
+
+	overwriteText, err := promptLine("覆盖已存在 JPG？y/N: ")
+	if err != nil {
+		return err
+	}
+	cfg.overwrite = parseYesNo(overwriteText, cfg.overwrite)
+
+	return nil
+}
+
+func promptLine(label string) (string, error) {
+	fmt.Print(label)
+	return stdinReader.ReadString('\n')
+}
+
+func parseYesNo(input string, defaultValue bool) bool {
+	input = strings.ToLower(strings.TrimSpace(input))
+	switch input {
+	case "y", "yes", "是", "对", "1", "true":
+		return true
+	case "n", "no", "否", "不", "0", "false":
+		return false
+	default:
+		return defaultValue
+	}
 }
 
 func cleanInputPath(input string) string {
@@ -160,8 +238,16 @@ func detectConverter() (*converter, error) {
 	if path, err := exec.LookPath("magick"); err == nil {
 		return &converter{
 			name: "ImageMagick: " + path,
-			run: func(src, dst string) error {
-				cmd := exec.Command("magick", src, "-auto-orient", "-strip", "-quality", "100", dst)
+			run: func(src, dst string, cfg *config) error {
+				args := []string{src, "-auto-orient"}
+				if !cfg.keepMeta {
+					args = append(args, "-strip")
+				}
+				if cfg.progressive {
+					args = append(args, "-interlace", "JPEG")
+				}
+				args = append(args, "-quality", fmt.Sprintf("%d", cfg.quality), dst)
+				cmd := exec.Command("magick", args...)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("magick 转换失败: %v: %s", err, strings.TrimSpace(string(out)))
@@ -174,8 +260,8 @@ func detectConverter() (*converter, error) {
 	if path, err := exec.LookPath("heif-convert"); err == nil {
 		return &converter{
 			name: "libheif-tools: " + path,
-			run: func(src, dst string) error {
-				cmd := exec.Command("heif-convert", src, dst)
+			run: func(src, dst string, cfg *config) error {
+				cmd := exec.Command("heif-convert", "-q", fmt.Sprintf("%d", cfg.quality), src, dst)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("heif-convert 转换失败: %v: %s", err, strings.TrimSpace(string(out)))
