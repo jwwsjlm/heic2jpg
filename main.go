@@ -401,7 +401,7 @@ func promptDeleteAfterReview(successCount int64) (bool, error) {
 
 func backupOriginals(paths []string, input string) (int, []string, string) {
 	base := backupBaseDir(input)
-	backupDir := filepath.Join(base, "_heic_original_backup_"+time.Now().Format("20060102-150405"))
+	backupDir := filepath.Join(appDir(), "_heic_original_backup_"+time.Now().Format("20060102-150405"))
 	moved := 0
 	var failures []string
 
@@ -436,6 +436,21 @@ func backupBaseDir(input string) string {
 		return filepath.Dir(input)
 	}
 	return input
+}
+
+func appDir() string {
+	exe, err := os.Executable()
+	if err == nil {
+		if resolved, evalErr := filepath.EvalSymlinks(exe); evalErr == nil {
+			exe = resolved
+		}
+		return filepath.Dir(exe)
+	}
+	wd, err := os.Getwd()
+	if err == nil {
+		return wd
+	}
+	return "."
 }
 
 func uniquePath(path string) string {

@@ -207,7 +207,7 @@ IMG_002.heif -> IMG_002.jpg
 ./heic2jpg -input /path/to/photos -delete-original
 ```
 
-> 参数名仍叫 `-delete-original`，但现在不会直接永久删除，而是移动到 `_heic_original_backup_YYYYMMDD-HHMMSS` 备份目录。
+> 参数名仍叫 `-delete-original`，但现在不会直接永久删除，而是移动到软件所在目录下的 `_heic_original_backup_YYYYMMDD-HHMMSS` 备份目录。
 
 安全规则：
 
@@ -216,3 +216,4 @@ IMG_002.heif -> IMG_002.jpg
 - 转换失败不会移动
 - 因已有 JPG 被跳过的文件不会移动
 - 移动发生在全部转换和统计输出之后
+- 备份目录固定创建在 `heic2jpg` / `heic2jpg.exe` 软件所在目录，方便统一管理
