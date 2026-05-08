@@ -13,6 +13,7 @@
 - 输出到原文件所在目录
 - 自动保留原文件名，仅后缀改成 `.jpg`
 - 默认不覆盖已有 JPG
+- 可选转换成功后自动删除原始 HEIC/HEIF 文件
 
 ## 依赖
 
@@ -98,6 +99,9 @@ go build -o heic2jpg .
 请输入转换等级 1-10，然后按回车。
 1 = 文件更小，10 = 最高画质/近似无损
 等级 [10]:
+
+转换成功后是否删除原始 HEIC/HEIF 文件？
+删除原文件？y/N [N]:
 ```
 
 把文件夹路径粘贴进去即可，也可以把文件夹/文件直接拖到窗口里，再按回车。
@@ -127,6 +131,9 @@ go build -o heic2jpg .
 # 覆盖已有 jpg
 ./heic2jpg -input /path/to/photos -overwrite
 
+# 转换成功后删除原始 HEIC/HEIF 文件
+./heic2jpg -input /path/to/photos -delete-original
+
 # 只扫描当前目录，不递归子目录
 ./heic2jpg -input /path/to/photos -recursive=false
 
@@ -153,8 +160,28 @@ IMG_001.HEIC -> IMG_001.jpg
 IMG_002.heif -> IMG_002.jpg
 ```
 
-如果目录里已经有同名 JPG，默认跳过。需要覆盖时使用：
+如果目录里已经有同名 JPG，默认跳过。跳过的文件不会删除原始 HEIC/HEIF。
+
+需要覆盖时使用：
 
 ```bash
 ./heic2jpg -input /path/to/photos -overwrite
 ```
+
+
+## 删除原始文件
+
+默认不会删除原始 HEIC/HEIF 文件。
+
+如果希望转换成功后自动删除原文件，可以在交互模式里输入 `y`，或者使用命令行参数：
+
+```bash
+./heic2jpg -input /path/to/photos -delete-original
+```
+
+安全规则：
+
+- 只有 JPG 转换成功后，才会删除对应原始 HEIC/HEIF
+- 转换失败不会删除
+- 因已有 JPG 被跳过的文件不会删除
+- 如果 JPG 已生成但删除原文件失败，会在最后的失败详情里显示

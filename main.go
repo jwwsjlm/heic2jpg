@@ -19,11 +19,12 @@ import (
 )
 
 type config struct {
-	input     string
-	recursive bool
-	overwrite bool
-	level     int
-	workers   int
+	input          string
+	recursive      bool
+	overwrite      bool
+	deleteOriginal bool
+	level          int
+	workers        int
 }
 
 type jpgOptions struct {
@@ -114,6 +115,14 @@ func main() {
 					failures.add(fmt.Sprintf("%s -> %v", j.src, err))
 					progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
 					continue
+				}
+				if cfg.deleteOriginal {
+					if err := os.Remove(j.src); err != nil {
+						failCount.Add(1)
+						failures.add(fmt.Sprintf("%s -> JPG 已生成，但删除原文件失败: %v", j.src, err))
+						progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
+						continue
+					}
 				}
 				okCount.Add(1)
 				progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
@@ -217,6 +226,7 @@ func parseFlags() (*config, error) {
 	flag.StringVar(&cfg.input, "input", "", "输入文件或目录")
 	flag.BoolVar(&cfg.recursive, "recursive", true, "输入为目录时是否递归扫描")
 	flag.BoolVar(&cfg.overwrite, "overwrite", false, "是否覆盖已存在 jpg")
+	flag.BoolVar(&cfg.deleteOriginal, "delete-original", false, "转换成功后删除原始 HEIC/HEIF 文件；默认不删除")
 	flag.IntVar(&cfg.level, "level", 10, "转换等级，1-10；10 为最高质量/近似无损")
 	flag.IntVar(&cfg.workers, "workers", 0, "并发线程数；默认 0 表示自动使用 CPU 核心数")
 	flag.Parse()
@@ -238,6 +248,12 @@ func parseFlags() (*config, error) {
 			return nil, err
 		}
 		cfg.level = level
+
+		deleteOriginal, err := promptDeleteOriginal(cfg.deleteOriginal)
+		if err != nil {
+			return nil, err
+		}
+		cfg.deleteOriginal = deleteOriginal
 	}
 
 	absInput, err := filepath.Abs(cfg.input)
@@ -293,6 +309,34 @@ func promptLevel(defaultLevel int) (int, error) {
 		return 0, fmt.Errorf("等级不是有效数字: %s", text)
 	}
 	return level, nil
+}
+
+func promptDeleteOriginal(defaultValue bool) (bool, error) {
+	fmt.Println()
+	fmt.Println("转换成功后是否删除原始 HEIC/HEIF 文件？")
+	fmt.Println("注意：只有转换成功的文件才会删除；失败或跳过的文件不会删除。")
+
+	defaultText := "N"
+	if defaultValue {
+		defaultText = "Y"
+	}
+	text, err := promptLine(fmt.Sprintf("删除原文件？y/N [%s]: ", defaultText))
+	if err != nil {
+		return false, err
+	}
+	return parseYesNo(text, defaultValue), nil
+}
+
+func parseYesNo(input string, defaultValue bool) bool {
+	input = strings.ToLower(strings.TrimSpace(input))
+	switch input {
+	case "y", "yes", "是", "对", "1", "true":
+		return true
+	case "n", "no", "否", "不", "0", "false":
+		return false
+	default:
+		return defaultValue
+	}
 }
 
 func promptLine(label string) (string, error) {
