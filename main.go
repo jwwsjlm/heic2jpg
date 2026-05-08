@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type config struct {
@@ -88,8 +89,12 @@ func main() {
 	fmt.Println("------------------------------")
 
 	var okCount, skipCount, failCount atomic.Int64
+	progress := newProgressBar(len(jobs))
+	failures := newFailureList()
 	jobCh := make(chan job)
 	var wg sync.WaitGroup
+
+	progress.render(okCount.Load(), skipCount.Load(), failCount.Load())
 
 	for i := 1; i <= workerCount; i++ {
 		wg.Add(1)
@@ -98,19 +103,20 @@ func main() {
 			for j := range jobCh {
 				if !cfg.overwrite {
 					if _, err := os.Stat(j.dst); err == nil {
-						log.Printf("[SKIP][%02d] %s -> %s 已存在", workerID, j.src, j.dst)
 						skipCount.Add(1)
+						progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
 						continue
 					}
 				}
 
-				log.Printf("[DO][%02d] %s -> %s", workerID, j.src, j.dst)
 				if err := conv.run(j.src, j.dst, opt); err != nil {
-					log.Printf("[FAIL][%02d] %s -> %v", workerID, j.src, err)
 					failCount.Add(1)
+					failures.add(fmt.Sprintf("%s -> %v", j.src, err))
+					progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
 					continue
 				}
 				okCount.Add(1)
+				progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
 			}
 		}(i)
 	}
@@ -120,12 +126,90 @@ func main() {
 	}
 	close(jobCh)
 	wg.Wait()
+	progress.finish(okCount.Load(), skipCount.Load(), failCount.Load())
 
 	fmt.Println("------------------------------")
 	fmt.Printf("总数: %d, 成功: %d, 跳过: %d, 失败: %d\n", len(jobs), okCount.Load(), skipCount.Load(), failCount.Load())
 	if failCount.Load() > 0 {
+		fmt.Println()
+		fmt.Println("失败详情：")
+		for _, msg := range failures.items() {
+			fmt.Println("- " + msg)
+		}
 		os.Exit(2)
 	}
+}
+
+type progressBar struct {
+	total   int64
+	current int64
+	start   time.Time
+	mu      sync.Mutex
+}
+
+func newProgressBar(total int) *progressBar {
+	return &progressBar{total: int64(total), start: time.Now()}
+}
+
+func (p *progressBar) add(ok, skip, fail int64) {
+	p.mu.Lock()
+	p.current++
+	p.renderLocked(ok, skip, fail)
+	p.mu.Unlock()
+}
+
+func (p *progressBar) render(ok, skip, fail int64) {
+	p.mu.Lock()
+	p.renderLocked(ok, skip, fail)
+	p.mu.Unlock()
+}
+
+func (p *progressBar) finish(ok, skip, fail int64) {
+	p.mu.Lock()
+	p.current = p.total
+	p.renderLocked(ok, skip, fail)
+	fmt.Println()
+	p.mu.Unlock()
+}
+
+func (p *progressBar) renderLocked(ok, skip, fail int64) {
+	width := int64(30)
+	filled := int64(0)
+	percent := float64(100)
+	if p.total > 0 {
+		filled = p.current * width / p.total
+		percent = float64(p.current) * 100 / float64(p.total)
+	}
+	if filled > width {
+		filled = width
+	}
+
+	bar := strings.Repeat("█", int(filled)) + strings.Repeat("░", int(width-filled))
+	elapsed := time.Since(p.start).Round(time.Second)
+	fmt.Printf("\r[%s] %6.2f%%  %d/%d  成功:%d 跳过:%d 失败:%d  耗时:%s", bar, percent, p.current, p.total, ok, skip, fail, elapsed)
+}
+
+type failureList struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func newFailureList() *failureList {
+	return &failureList{}
+}
+
+func (f *failureList) add(msg string) {
+	f.mu.Lock()
+	f.list = append(f.list, msg)
+	f.mu.Unlock()
+}
+
+func (f *failureList) items() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.list))
+	copy(out, f.list)
+	return out
 }
 
 func parseFlags() (*config, error) {
