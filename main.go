@@ -43,6 +43,29 @@ type job struct {
 	dst string
 }
 
+type successList struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func newSuccessList() *successList {
+	return &successList{}
+}
+
+func (s *successList) add(path string) {
+	s.mu.Lock()
+	s.list = append(s.list, path)
+	s.mu.Unlock()
+}
+
+func (s *successList) items() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.list))
+	copy(out, s.list)
+	return out
+}
+
 var stdinReader = bufio.NewReader(os.Stdin)
 
 func main() {
@@ -91,6 +114,7 @@ func main() {
 
 	var okCount, skipCount, failCount atomic.Int64
 	progress := newProgressBar(len(jobs))
+	successes := newSuccessList()
 	failures := newFailureList()
 	jobCh := make(chan job)
 	var wg sync.WaitGroup
@@ -116,14 +140,7 @@ func main() {
 					progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
 					continue
 				}
-				if cfg.deleteOriginal {
-					if err := os.Remove(j.src); err != nil {
-						failCount.Add(1)
-						failures.add(fmt.Sprintf("%s -> JPG 已生成，但删除原文件失败: %v", j.src, err))
-						progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
-						continue
-					}
-				}
+				successes.add(j.src)
 				okCount.Add(1)
 				progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
 			}
@@ -145,6 +162,33 @@ func main() {
 		for _, msg := range failures.items() {
 			fmt.Println("- " + msg)
 		}
+	}
+
+	deleteRequested := cfg.deleteOriginal
+	if !deleteRequested && okCount.Load() > 0 && isInteractiveTerminal() {
+		answer, err := promptDeleteAfterReview(okCount.Load())
+		if err != nil {
+			fmt.Printf("读取删除确认失败，已保留原始文件: %v\n", err)
+		} else {
+			deleteRequested = answer
+		}
+	}
+
+	if deleteRequested {
+		deleted, deleteFailures := deleteOriginals(successes.items())
+		fmt.Println("------------------------------")
+		fmt.Printf("原始文件删除完成: 已删除 %d 个，失败 %d 个\n", deleted, len(deleteFailures))
+		if len(deleteFailures) > 0 {
+			fmt.Println()
+			fmt.Println("删除失败详情：")
+			for _, msg := range deleteFailures {
+				fmt.Println("- " + msg)
+			}
+			os.Exit(2)
+		}
+	}
+
+	if failCount.Load() > 0 {
 		os.Exit(2)
 	}
 }
@@ -313,18 +357,52 @@ func promptLevel(defaultLevel int) (int, error) {
 
 func promptDeleteOriginal(defaultValue bool) (bool, error) {
 	fmt.Println()
-	fmt.Println("转换成功后是否删除原始 HEIC/HEIF 文件？")
-	fmt.Println("注意：只有转换成功的文件才会删除；失败或跳过的文件不会删除。")
+	fmt.Println("是否在转换全部完成后自动删除原始 HEIC/HEIF 文件？")
+	fmt.Println("建议直接回车选 N，等转换完成、确认数据没问题后再手动确认删除。")
+	fmt.Println("注意：只有本次成功转换的文件才会删除；失败或跳过的文件不会删除。")
 
 	defaultText := "N"
 	if defaultValue {
 		defaultText = "Y"
 	}
-	text, err := promptLine(fmt.Sprintf("删除原文件？y/N [%s]: ", defaultText))
+	text, err := promptLine(fmt.Sprintf("完成后自动删除原文件？y/N [%s]: ", defaultText))
 	if err != nil {
 		return false, err
 	}
 	return parseYesNo(text, defaultValue), nil
+}
+
+func promptDeleteAfterReview(successCount int64) (bool, error) {
+	fmt.Println()
+	fmt.Printf("本次成功转换 %d 个文件。请确认 JPG 数据没问题。\n", successCount)
+	fmt.Println("是否现在删除这些成功转换对应的原始 HEIC/HEIF 文件？")
+	fmt.Println("输入 y 删除；直接回车保留原文件。")
+	text, err := promptLine("确认删除原文件？y/N: ")
+	if err != nil {
+		return false, err
+	}
+	return parseYesNo(text, false), nil
+}
+
+func deleteOriginals(paths []string) (int, []string) {
+	deleted := 0
+	var failures []string
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil {
+			failures = append(failures, fmt.Sprintf("%s -> %v", path, err))
+			continue
+		}
+		deleted++
+	}
+	return deleted, failures
+}
+
+func isInteractiveTerminal() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func parseYesNo(input string, defaultValue bool) bool {
