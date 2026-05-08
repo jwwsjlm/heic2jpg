@@ -45,6 +45,33 @@ brew install imagemagick
 brew install libheif
 ```
 
+
+### Windows
+
+推荐安装 ImageMagick：
+
+<https://imagemagick.org/script/download.php#windows>
+
+安装时建议勾选：
+
+- `Add application directory to your system path`
+- 如果安装器里有 HEIC/HEIF 支持选项，也一起勾选
+
+装好后重新打开终端，运行：
+
+```powershell
+magick -version
+```
+
+如果能看到版本号，就可以运行 `heic2jpg.exe`。
+
+如果忘记勾选 PATH，程序也会自动尝试查找：
+
+```text
+C:\Program Files\ImageMagick-*\magick.exe
+C:\Program Files (x86)\ImageMagick-*\magick.exe
+```
+
 程序会优先使用 `magick`，找不到时自动尝试 `heif-convert`，macOS 上还会自动尝试系统自带的 `sips`。
 
 ## 编译

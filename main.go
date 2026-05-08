@@ -246,8 +246,33 @@ func levelToJPGOptions(level int) jpgOptions {
 	}
 }
 
-func detectConverter() (*converter, error) {
+func findMagick() (string, error) {
 	if path, err := exec.LookPath("magick"); err == nil {
+		return path, nil
+	}
+
+	// Windows installer commonly places magick.exe under these directories.
+	// This helps users who installed ImageMagick but did not add it to PATH.
+	patterns := []string{
+		`C:\Program Files\ImageMagick-*\magick.exe`,
+		`C:\Program Files (x86)\ImageMagick-*\magick.exe`,
+	}
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		if len(matches) > 0 {
+			sort.Strings(matches)
+			return matches[len(matches)-1], nil
+		}
+	}
+
+	return "", errors.New("magick not found")
+}
+
+func detectConverter() (*converter, error) {
+	if path, err := findMagick(); err == nil {
 		return &converter{
 			name: "ImageMagick: " + path,
 			run: func(src, dst string, opt jpgOptions) error {
@@ -259,7 +284,7 @@ func detectConverter() (*converter, error) {
 					args = append(args, "-interlace", "JPEG")
 				}
 				args = append(args, "-quality", fmt.Sprintf("%d", opt.quality), dst)
-				cmd := exec.Command("magick", args...)
+				cmd := exec.Command(path, args...)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("magick 转换失败: %v: %s", err, strings.TrimSpace(string(out)))
@@ -317,8 +342,15 @@ macOS:
   brew install imagemagick
 
 Windows:
-  推荐安装 ImageMagick，并确保 magick.exe 已加入 PATH。
+  推荐安装 ImageMagick：
   https://imagemagick.org/script/download.php#windows
+
+  安装时建议勾选：
+  - Add application directory to your system path
+  - Install HEIC/HEIF support 如果安装器里有这个选项
+
+  如果忘记勾选 PATH，本程序也会自动尝试查找：
+  C:\Program Files\ImageMagick-*\magick.exe
 `, err)
 }
 
