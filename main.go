@@ -82,52 +82,30 @@ func main() {
 		log.Fatalf("%s", converterInstallHelp(err))
 	}
 
-	files, err := collectHEICFiles(cfg.input, cfg.recursive)
-	if err != nil {
-		log.Fatalf("扫描输入失败: %v", err)
-	}
-	if len(files) == 0 {
-		log.Fatalf("没有找到 HEIC/HEIF 文件: %s", cfg.input)
-	}
-
-	jobs := make([]job, 0, len(files))
-	for _, src := range files {
-		jobs = append(jobs, job{src: src, dst: outputPath(src)})
-	}
-
-	existingCount := countExistingOutputs(jobs)
-	fmt.Println("------------------------------")
-	fmt.Printf("预检查: 找到 HEIC/HEIF %d 个，待输出 JPG %d 个，已存在会跳过 %d 个\n", len(files), len(jobs), existingCount)
-	if existingCount > 0 && !cfg.overwrite {
-		fmt.Println("提示: 如果想覆盖已有 JPG，请使用 -overwrite")
-	}
-
 	workerCount := cfg.workers
 	if workerCount <= 0 {
-		workerCount = runtime.NumCPU()
+		workerCount = defaultWorkerCount()
 	}
 	if workerCount < 1 {
 		workerCount = 1
-	}
-	if workerCount > len(jobs) {
-		workerCount = len(jobs)
 	}
 
 	fmt.Println("------------------------------")
 	fmt.Printf("转换器: %s\n", conv.name)
 	fmt.Printf("等级: %d/10 -> JPG quality=%d, keep-meta=%v, progressive=%v\n", cfg.level, opt.quality, opt.keepMeta, opt.progressive)
-	fmt.Printf("并发线程: %d，任务数: %d\n", workerCount, len(jobs))
+	fmt.Printf("并发线程: %d\n", workerCount)
 	fmt.Println("输出规则: 原目录，同文件名，后缀改为 .jpg")
+	fmt.Println("扫描和转换将并行执行，发现 HEIC/HEIF 后立即开始转换")
 	fmt.Println("------------------------------")
 
-	var okCount, skipCount, failCount atomic.Int64
-	progress := newProgressBar(len(jobs))
+	var foundCount, okCount, skipCount, failCount atomic.Int64
+	progress := newProgressBar()
 	successes := newSuccessList()
 	failures := newFailureList()
 	jobCh := make(chan job)
 	var wg sync.WaitGroup
 
-	progress.render(okCount.Load(), skipCount.Load(), failCount.Load())
+	progress.render(foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 
 	for i := 1; i <= workerCount; i++ {
 		wg.Add(1)
@@ -137,7 +115,7 @@ func main() {
 				if !cfg.overwrite {
 					if _, err := os.Stat(j.dst); err == nil {
 						skipCount.Add(1)
-						progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
+						progress.add(foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 						continue
 					}
 				}
@@ -145,31 +123,40 @@ func main() {
 				if err := conv.run(j.src, j.dst, opt); err != nil {
 					failCount.Add(1)
 					failures.add(fmt.Sprintf("%s -> %v", j.src, err))
-					progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
+					progress.add(foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 					continue
 				}
 				if err := preserveFileTimes(j.src, j.dst); err != nil {
 					failCount.Add(1)
 					failures.add(fmt.Sprintf("%s -> JPG 已生成，但同步文件修改时间失败: %v", j.src, err))
-					progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
+					progress.add(foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 					continue
 				}
 				successes.add(j.src)
 				okCount.Add(1)
-				progress.add(okCount.Load(), skipCount.Load(), failCount.Load())
+				progress.add(foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 			}
 		}(i)
 	}
 
-	for _, j := range jobs {
+	if err := streamHEICJobs(cfg.input, cfg.recursive, func(j job) {
+		foundCount.Add(1)
+		progress.discover(foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 		jobCh <- j
+	}); err != nil {
+		close(jobCh)
+		wg.Wait()
+		log.Fatalf("扫描输入失败: %v", err)
 	}
 	close(jobCh)
 	wg.Wait()
-	progress.finish(okCount.Load(), skipCount.Load(), failCount.Load())
+	if foundCount.Load() == 0 {
+		log.Fatalf("没有找到 HEIC/HEIF 文件: %s", cfg.input)
+	}
+	progress.finish(foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 
 	fmt.Println("------------------------------")
-	fmt.Printf("总数: %d, 成功: %d, 跳过: %d, 失败: %d\n", len(jobs), okCount.Load(), skipCount.Load(), failCount.Load())
+	fmt.Printf("总数: %d, 成功: %d, 跳过: %d, 失败: %d\n", foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load())
 	if failCount.Load() > 0 {
 		fmt.Println()
 		fmt.Println("失败详情：")
@@ -215,44 +202,48 @@ func main() {
 }
 
 type progressBar struct {
-	total   int64
-	current int64
-	start   time.Time
-	mu      sync.Mutex
+	start time.Time
+	mu    sync.Mutex
 }
 
-func newProgressBar(total int) *progressBar {
-	return &progressBar{total: int64(total), start: time.Now()}
+func newProgressBar() *progressBar {
+	return &progressBar{start: time.Now()}
 }
 
-func (p *progressBar) add(ok, skip, fail int64) {
+func (p *progressBar) discover(found, ok, skip, fail int64) {
 	p.mu.Lock()
-	p.current++
-	p.renderLocked(ok, skip, fail)
+	p.renderLocked(found, ok, skip, fail)
 	p.mu.Unlock()
 }
 
-func (p *progressBar) render(ok, skip, fail int64) {
+func (p *progressBar) add(found, ok, skip, fail int64) {
 	p.mu.Lock()
-	p.renderLocked(ok, skip, fail)
+	p.renderLocked(found, ok, skip, fail)
 	p.mu.Unlock()
 }
 
-func (p *progressBar) finish(ok, skip, fail int64) {
+func (p *progressBar) render(found, ok, skip, fail int64) {
 	p.mu.Lock()
-	p.current = p.total
-	p.renderLocked(ok, skip, fail)
+	p.renderLocked(found, ok, skip, fail)
+	p.mu.Unlock()
+}
+
+func (p *progressBar) finish(found, ok, skip, fail int64) {
+	p.mu.Lock()
+	p.renderLocked(found, ok, skip, fail)
 	fmt.Println()
 	p.mu.Unlock()
 }
 
-func (p *progressBar) renderLocked(ok, skip, fail int64) {
+func (p *progressBar) renderLocked(found, ok, skip, fail int64) {
+	done := ok + skip + fail
 	width := int64(30)
 	filled := int64(0)
-	percent := float64(100)
-	if p.total > 0 {
-		filled = p.current * width / p.total
-		percent = float64(p.current) * 100 / float64(p.total)
+	percentText := "扫描中"
+	if found > 0 {
+		filled = done * width / found
+		percent := float64(done) * 100 / float64(found)
+		percentText = fmt.Sprintf("%6.2f%%", percent)
 	}
 	if filled > width {
 		filled = width
@@ -260,7 +251,7 @@ func (p *progressBar) renderLocked(ok, skip, fail int64) {
 
 	bar := strings.Repeat("█", int(filled)) + strings.Repeat("░", int(width-filled))
 	elapsed := time.Since(p.start).Round(time.Second)
-	fmt.Printf("\r[%s] %6.2f%%  %d/%d  成功:%d 跳过:%d 失败:%d  耗时:%s", bar, percent, p.current, p.total, ok, skip, fail, elapsed)
+	fmt.Printf("\r[%s] %s  已发现:%d 已处理:%d  成功:%d 跳过:%d 失败:%d  耗时:%s", bar, percentText, found, done, ok, skip, fail, elapsed)
 }
 
 type failureList struct {
@@ -671,20 +662,20 @@ Windows:
 `, err)
 }
 
-func collectHEICFiles(input string, recursive bool) ([]string, error) {
+func streamHEICJobs(input string, recursive bool, emit func(job)) error {
 	info, err := os.Stat(input)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if !info.IsDir() {
 		if isHEIC(input) {
-			return []string{input}, nil
+			emit(job{src: input, dst: outputPath(input)})
+			return nil
 		}
-		return nil, fmt.Errorf("输入文件不是 HEIC/HEIF: %s", input)
+		return fmt.Errorf("输入文件不是 HEIC/HEIF: %s", input)
 	}
 
-	var files []string
 	walkFn := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -696,26 +687,23 @@ func collectHEICFiles(input string, recursive bool) ([]string, error) {
 			return nil
 		}
 		if isHEIC(path) {
-			files = append(files, path)
+			emit(job{src: path, dst: outputPath(path)})
 		}
 		return nil
 	}
 
-	if err := filepath.WalkDir(input, walkFn); err != nil {
-		return nil, err
-	}
-	sort.Strings(files)
-	return files, nil
+	return filepath.WalkDir(input, walkFn)
 }
 
-func countExistingOutputs(jobs []job) int {
-	count := 0
-	for _, j := range jobs {
-		if _, err := os.Stat(j.dst); err == nil {
-			count++
-		}
+func defaultWorkerCount() int {
+	workers := runtime.NumCPU()
+	if workers > 4 {
+		workers = 4
 	}
-	return count
+	if workers < 1 {
+		workers = 1
+	}
+	return workers
 }
 
 func writeFailureLog(messages []string) (string, error) {
