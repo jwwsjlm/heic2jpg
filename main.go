@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -94,6 +95,13 @@ func main() {
 		jobs = append(jobs, job{src: src, dst: outputPath(src)})
 	}
 
+	existingCount := countExistingOutputs(jobs)
+	fmt.Println("------------------------------")
+	fmt.Printf("预检查: 找到 HEIC/HEIF %d 个，待输出 JPG %d 个，已存在会跳过 %d 个\n", len(files), len(jobs), existingCount)
+	if existingCount > 0 && !cfg.overwrite {
+		fmt.Println("提示: 如果想覆盖已有 JPG，请使用 -overwrite")
+	}
+
 	workerCount := cfg.workers
 	if workerCount <= 0 {
 		workerCount = runtime.NumCPU()
@@ -159,8 +167,14 @@ func main() {
 	if failCount.Load() > 0 {
 		fmt.Println()
 		fmt.Println("失败详情：")
-		for _, msg := range failures.items() {
+		failureItems := failures.items()
+		for _, msg := range failureItems {
 			fmt.Println("- " + msg)
+		}
+		if logPath, err := writeFailureLog(failureItems); err == nil && logPath != "" {
+			fmt.Printf("失败日志: %s\n", logPath)
+		} else if err != nil {
+			fmt.Printf("写入失败日志失败: %v\n", err)
 		}
 	}
 
@@ -175,13 +189,14 @@ func main() {
 	}
 
 	if deleteRequested {
-		deleted, deleteFailures := deleteOriginals(successes.items())
+		moved, moveFailures, backupDir := backupOriginals(successes.items(), cfg.input)
 		fmt.Println("------------------------------")
-		fmt.Printf("原始文件删除完成: 已删除 %d 个，失败 %d 个\n", deleted, len(deleteFailures))
-		if len(deleteFailures) > 0 {
+		fmt.Printf("原始文件已移动到备份目录: %s\n", backupDir)
+		fmt.Printf("移动完成: 已移动 %d 个，失败 %d 个\n", moved, len(moveFailures))
+		if len(moveFailures) > 0 {
 			fmt.Println()
-			fmt.Println("删除失败详情：")
-			for _, msg := range deleteFailures {
+			fmt.Println("移动失败详情：")
+			for _, msg := range moveFailures {
 				fmt.Println("- " + msg)
 			}
 			os.Exit(2)
@@ -270,7 +285,7 @@ func parseFlags() (*config, error) {
 	flag.StringVar(&cfg.input, "input", "", "输入文件或目录")
 	flag.BoolVar(&cfg.recursive, "recursive", true, "输入为目录时是否递归扫描")
 	flag.BoolVar(&cfg.overwrite, "overwrite", false, "是否覆盖已存在 jpg")
-	flag.BoolVar(&cfg.deleteOriginal, "delete-original", false, "转换成功后删除原始 HEIC/HEIF 文件；默认不删除")
+	flag.BoolVar(&cfg.deleteOriginal, "delete-original", false, "转换完成后将本次成功转换的原始 HEIC/HEIF 移动到备份目录；默认不移动")
 	flag.IntVar(&cfg.level, "level", 10, "转换等级，1-10；10 为最高质量/近似无损")
 	flag.IntVar(&cfg.workers, "workers", 0, "并发线程数；默认 0 表示自动使用 CPU 核心数")
 	flag.Parse()
@@ -357,15 +372,15 @@ func promptLevel(defaultLevel int) (int, error) {
 
 func promptDeleteOriginal(defaultValue bool) (bool, error) {
 	fmt.Println()
-	fmt.Println("是否在转换全部完成后自动删除原始 HEIC/HEIF 文件？")
-	fmt.Println("建议直接回车选 N，等转换完成、确认数据没问题后再手动确认删除。")
-	fmt.Println("注意：只有本次成功转换的文件才会删除；失败或跳过的文件不会删除。")
+	fmt.Println("是否在转换全部完成后自动移动原始 HEIC/HEIF 到备份目录？")
+	fmt.Println("建议直接回车选 N，等转换完成、确认数据没问题后再手动确认移动。")
+	fmt.Println("注意：只有本次成功转换的文件才会移动；失败或跳过的文件不会移动。")
 
 	defaultText := "N"
 	if defaultValue {
 		defaultText = "Y"
 	}
-	text, err := promptLine(fmt.Sprintf("完成后自动删除原文件？y/N [%s]: ", defaultText))
+	text, err := promptLine(fmt.Sprintf("完成后自动移动原文件到备份目录？y/N [%s]: ", defaultText))
 	if err != nil {
 		return false, err
 	}
@@ -375,26 +390,85 @@ func promptDeleteOriginal(defaultValue bool) (bool, error) {
 func promptDeleteAfterReview(successCount int64) (bool, error) {
 	fmt.Println()
 	fmt.Printf("本次成功转换 %d 个文件。请确认 JPG 数据没问题。\n", successCount)
-	fmt.Println("是否现在删除这些成功转换对应的原始 HEIC/HEIF 文件？")
-	fmt.Println("输入 y 删除；直接回车保留原文件。")
-	text, err := promptLine("确认删除原文件？y/N: ")
+	fmt.Println("是否现在把这些成功转换对应的原始 HEIC/HEIF 文件移动到备份目录？")
+	fmt.Println("输入 y 移动；直接回车保留原文件。")
+	text, err := promptLine("确认移动原文件到备份目录？y/N: ")
 	if err != nil {
 		return false, err
 	}
 	return parseYesNo(text, false), nil
 }
 
-func deleteOriginals(paths []string) (int, []string) {
-	deleted := 0
+func backupOriginals(paths []string, input string) (int, []string, string) {
+	base := backupBaseDir(input)
+	backupDir := filepath.Join(base, "_heic_original_backup_"+time.Now().Format("20060102-150405"))
+	moved := 0
 	var failures []string
-	for _, path := range paths {
-		if err := os.Remove(path); err != nil {
-			failures = append(failures, fmt.Sprintf("%s -> %v", path, err))
+
+	for _, src := range paths {
+		rel, err := filepath.Rel(base, src)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			rel = filepath.Base(src)
+		}
+		dst := uniquePath(filepath.Join(backupDir, rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			failures = append(failures, fmt.Sprintf("%s -> 创建备份目录失败: %v", src, err))
 			continue
 		}
-		deleted++
+		if err := os.Rename(src, dst); err != nil {
+			if copyErr := copyFile(src, dst); copyErr != nil {
+				failures = append(failures, fmt.Sprintf("%s -> 移动到备份目录失败: %v", src, err))
+				continue
+			}
+			if removeErr := os.Remove(src); removeErr != nil {
+				failures = append(failures, fmt.Sprintf("%s -> 已复制到备份目录，但删除原位置失败: %v", src, removeErr))
+				continue
+			}
+		}
+		moved++
 	}
-	return deleted, failures
+	return moved, failures, backupDir
+}
+
+func backupBaseDir(input string) string {
+	info, err := os.Stat(input)
+	if err == nil && !info.IsDir() {
+		return filepath.Dir(input)
+	}
+	return input
+}
+
+func uniquePath(path string) string {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return path
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for i := 1; ; i++ {
+		candidate := fmt.Sprintf("%s_%d%s", base, i, ext)
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate
+		}
+	}
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func isInteractiveTerminal() bool {
@@ -477,8 +551,24 @@ func findMagick() (string, error) {
 	return "", errors.New("magick not found")
 }
 
+func checkMagickHEICSupport(path string) error {
+	cmd := exec.Command(path, "-list", "format")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ImageMagick 可执行，但检测格式支持失败: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	upper := strings.ToUpper(string(out))
+	if !strings.Contains(upper, "HEIC") && !strings.Contains(upper, "HEIF") {
+		return errors.New("ImageMagick 已安装，但当前版本没有检测到 HEIC/HEIF 支持")
+	}
+	return nil
+}
+
 func detectConverter() (*converter, error) {
 	if path, err := findMagick(); err == nil {
+		if err := checkMagickHEICSupport(path); err != nil {
+			return nil, err
+		}
 		return &converter{
 			name: "ImageMagick: " + path,
 			run: func(src, dst string, opt jpgOptions) error {
@@ -595,6 +685,32 @@ func collectHEICFiles(input string, recursive bool) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func countExistingOutputs(jobs []job) int {
+	count := 0
+	for _, j := range jobs {
+		if _, err := os.Stat(j.dst); err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+func writeFailureLog(messages []string) (string, error) {
+	if len(messages) == 0 {
+		return "", nil
+	}
+	name := "heic2jpg_failed_" + time.Now().Format("20060102-150405") + ".log"
+	content := strings.Join(messages, "\n") + "\n"
+	if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		return name, nil
+	}
+	return abs, nil
 }
 
 func outputPath(src string) string {

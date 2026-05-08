@@ -13,7 +13,10 @@
 - 输出到原文件所在目录
 - 自动保留原文件名，仅后缀改成 `.jpg`
 - 默认不覆盖已有 JPG
-- 转换完成后可确认是否删除原始 HEIC/HEIF 文件
+- 转换完成后可确认是否把原始 HEIC/HEIF 移动到备份目录
+- 转换前预检查已有 JPG 数量
+- ImageMagick 会预检测 HEIC/HEIF 支持
+- 失败时自动生成失败日志
 
 ## 依赖
 
@@ -76,7 +79,22 @@ C:\Program Files (x86)\ImageMagick-*\magick.exe
 
 程序会优先使用 `magick`，找不到时自动尝试 `heif-convert`，macOS 上还会自动尝试系统自带的 `sips`。
 
-## 编译
+## 下载 / 编译
+
+### 从 GitHub Actions 下载
+
+每次推送到 `main` 后，GitHub Actions 会自动编译：
+
+- Windows: `heic2jpg-windows-amd64.zip`
+- Linux: `heic2jpg-linux-amd64.tar.gz`
+- macOS Intel: `heic2jpg-darwin-amd64.tar.gz`
+- macOS Apple Silicon: `heic2jpg-darwin-arm64.tar.gz`
+
+进入 GitHub 仓库的 **Actions** 页面，打开最新的 `Build heic2jpg` 工作流，在页面底部的 **Artifacts** 下载即可。
+
+如果推送 tag，例如 `v1.0.0`，工作流还会自动发布 GitHub Release。
+
+### 本地编译
 
 ```bash
 go build -o heic2jpg .
@@ -169,30 +187,32 @@ IMG_002.heif -> IMG_002.jpg
 ```
 
 
-## 删除原始文件
+## 原始文件备份
 
-默认流程更安全：先完成全部转换，显示统计结果和失败详情，然后让你确认是否删除原始 HEIC/HEIF 文件。
+默认流程更安全：先完成全部转换，显示统计结果和失败详情，然后让你确认是否把原始 HEIC/HEIF 文件移动到备份目录。
 
 交互模式下，如果本次有成功转换的文件，结束后会提示：
 
 ```text
 本次成功转换 N 个文件。请确认 JPG 数据没问题。
-是否现在删除这些成功转换对应的原始 HEIC/HEIF 文件？
-确认删除原文件？y/N:
+是否现在把这些成功转换对应的原始 HEIC/HEIF 文件移动到备份目录？
+确认移动原文件到备份目录？y/N:
 ```
 
-输入 `y` 才会删除；直接回车会保留原文件。
+输入 `y` 才会移动；直接回车会保留原文件。
 
-如果你确定想在转换完成后自动删除，可以使用命令行参数：
+如果你确定想在转换完成后自动移动，可以使用命令行参数：
 
 ```bash
 ./heic2jpg -input /path/to/photos -delete-original
 ```
 
+> 参数名仍叫 `-delete-original`，但现在不会直接永久删除，而是移动到 `_heic_original_backup_YYYYMMDD-HHMMSS` 备份目录。
+
 安全规则：
 
-- 转换过程中不会边转边删
-- 只有本次 JPG 转换成功的文件，才会被加入待删除列表
-- 转换失败不会删除
-- 因已有 JPG 被跳过的文件不会删除
-- 删除发生在全部转换和统计输出之后
+- 转换过程中不会边转边移动
+- 只有本次 JPG 转换成功的文件，才会被加入待移动列表
+- 转换失败不会移动
+- 因已有 JPG 被跳过的文件不会移动
+- 移动发生在全部转换和统计输出之后
