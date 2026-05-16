@@ -164,6 +164,9 @@ jobs:
           fi
           if [ "${{ runner.os }}" = "Windows" ]; then
             exe="build/bin/${output}.exe"
+            if [ ! -f "$exe" ] && [ -f "build/bin/${output}" ]; then
+              mv "build/bin/${output}" "$exe"
+            fi
             if [ ! -f "$exe" ]; then
               found="$(find build/bin -maxdepth 1 -type f -name '*.exe' | head -n 1)"
               if [ -n "$found" ]; then mv "$found" "$exe"; fi
