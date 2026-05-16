@@ -70,6 +70,7 @@ func main() {
 		Height:      760,
 		MinWidth:    900,
 		MinHeight:   640,
+		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},
 		AssetServer: &assetserver.Options{Assets: assets},
 		OnStartup:   app.startup,
 		Bind:        []interface{}{app},
@@ -98,7 +99,15 @@ func shouldRunCLI() bool {
 	return false
 }
 
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	wailsruntime.OnFileDrop(ctx, func(_ int, _ int, paths []string) {
+		if len(paths) == 0 {
+			return
+		}
+		wailsruntime.EventsEmit(ctx, "source:dropped", paths[0])
+	})
+}
 
 func (a *App) SelectFile() (string, error) {
 	return wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
@@ -112,6 +121,8 @@ func (a *App) SelectFolder() (string, error) {
 }
 
 func (a *App) DefaultWorkers() int { return defaultWorkerCount() }
+
+func (a *App) ConverterStatus() ConverterStatus { return converterStatus() }
 
 func (a *App) StartConversion(req ConvertRequest) (*ConvertResult, error) {
 	if req.Level == 0 {

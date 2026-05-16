@@ -162,6 +162,14 @@ jobs:
           else
             wails build -platform "${{ matrix.platform.target }}" -ldflags "$ldflags" -o "$output" -clean
           fi
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            exe="build/bin/${output}.exe"
+            if [ ! -f "$exe" ]; then
+              found="$(find build/bin -maxdepth 1 -type f -name '*.exe' | head -n 1)"
+              if [ -n "$found" ]; then mv "$found" "$exe"; fi
+            fi
+            test -f "$exe"
+          fi
       - name: Package GUI
         shell: bash
         run: |

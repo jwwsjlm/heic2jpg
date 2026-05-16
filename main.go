@@ -36,7 +36,17 @@ type jpgOptions struct {
 
 type converter struct {
 	name string
+	path string
 	run  func(src, dst string, opt jpgOptions) error
+}
+
+// ConverterStatus is exposed to the GUI so users can see whether a HEIC converter is available.
+type ConverterStatus struct {
+	Available bool   `json:"available"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Message   string `json:"message"`
+	Help      string `json:"help"`
 }
 
 type job struct {
@@ -606,7 +616,8 @@ func detectConverter() (*converter, error) {
 			return nil, err
 		}
 		return &converter{
-			name: "ImageMagick: " + path,
+			name: "ImageMagick",
+			path: path,
 			run: func(src, dst string, opt jpgOptions) error {
 				args := []string{src, "-auto-orient"}
 				if !opt.keepMeta {
@@ -628,7 +639,8 @@ func detectConverter() (*converter, error) {
 
 	if path, err := exec.LookPath("heif-convert"); err == nil {
 		return &converter{
-			name: "libheif-tools: " + path,
+			name: "libheif-tools",
+			path: path,
 			run: func(src, dst string, opt jpgOptions) error {
 				cmd := exec.Command("heif-convert", "-q", fmt.Sprintf("%d", opt.quality), src, dst)
 				out, err := cmd.CombinedOutput()
@@ -642,7 +654,8 @@ func detectConverter() (*converter, error) {
 
 	if path, err := exec.LookPath("sips"); err == nil {
 		return &converter{
-			name: "macOS sips: " + path,
+			name: "macOS sips",
+			path: path,
 			run: func(src, dst string, opt jpgOptions) error {
 				cmd := exec.Command("sips", "-s", "format", "jpeg", "-s", "formatOptions", fmt.Sprintf("%d", opt.quality), src, "--out", dst)
 				out, err := cmd.CombinedOutput()
@@ -655,6 +668,23 @@ func detectConverter() (*converter, error) {
 	}
 
 	return nil, errors.New("magick / heif-convert / sips 都不可用")
+}
+
+func converterStatus() ConverterStatus {
+	conv, err := detectConverter()
+	if err != nil {
+		return ConverterStatus{
+			Available: false,
+			Message:   err.Error(),
+			Help:      converterInstallHelp(err),
+		}
+	}
+	return ConverterStatus{
+		Available: true,
+		Name:      conv.name,
+		Path:      conv.path,
+		Message:   conv.name + " 可用",
+	}
 }
 
 func converterInstallHelp(err error) string {

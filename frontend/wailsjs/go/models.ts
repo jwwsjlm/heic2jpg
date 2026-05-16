@@ -1,5 +1,5 @@
 export namespace main {
-	
+
 	export class ConvertRequest {
 	    input: string;
 	    recursive: boolean;
@@ -7,11 +7,11 @@ export namespace main {
 	    deleteOriginal: boolean;
 	    level: number;
 	    workers: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ConvertRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.input = source["input"];
@@ -33,11 +33,11 @@ export namespace main {
 	    moved: number;
 	    moveFailures: string[];
 	    duration: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ConvertResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.converter = source["converter"];
@@ -50,6 +50,26 @@ export namespace main {
 	        this.moved = source["moved"];
 	        this.moveFailures = source["moveFailures"];
 	        this.duration = source["duration"];
+	    }
+	}
+	export class ConverterStatus {
+	    available: boolean;
+	    name: string;
+	    path: string;
+	    message: string;
+	    help: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ConverterStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.message = source["message"];
+	        this.help = source["help"];
 	    }
 	}
 

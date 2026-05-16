@@ -8,6 +8,7 @@ const fallback = {
   async SelectFolder(){ alert('请在 Wails 桌面应用中使用文件夹选择。'); return '' },
   async DefaultWorkers(){ return Math.min(4, navigator.hardwareConcurrency || 4) },
   async RuntimeInfo(){ return { os: 'browser-preview', arch: '', version: 'dev', title: 'HEIC2JPG' } },
+  async ConverterStatus(){ return { available: false, message: '浏览器预览无法检测本机转换器', help: '请运行 Wails 桌面应用检测 ImageMagick / libheif-tools / sips。' } },
   async StartConversion(){ throw new Error('浏览器预览不能直接转换，请运行 Wails 应用。') }
 }
 
@@ -18,7 +19,9 @@ const progress = ref({ found: 0, done: 0, success: 0, skipped: 0, failed: 0, per
 const result = ref(null)
 const error = ref('')
 const info = ref({})
+const converter = ref({ available: false, message: '正在检测转换器...' })
 const log = ref([])
+const dragging = ref(false)
 
 const qualityText = computed(() => ({
   1:'文件最小', 2:'较小文件', 3:'轻量压缩', 4:'均衡偏小', 5:'均衡',
@@ -34,8 +37,20 @@ function pushLog(text){
   log.value = log.value.slice(0, 80)
 }
 
-async function pickFile(){ const p = await api.SelectFile(); if(p) form.input = p }
-async function pickFolder(){ const p = await api.SelectFolder(); if(p) form.input = p }
+async function pickFile(){ const p = await api.SelectFile(); if(p) setInput(p, '已选择文件') }
+async function pickFolder(){ const p = await api.SelectFolder(); if(p) setInput(p, '已选择文件夹') }
+function setInput(path, source = '已选择来源'){
+  if(!path) return
+  form.input = path
+  pushLog(`${source}：${path}`)
+}
+function onBrowserDrop(event){
+  dragging.value = false
+  event.preventDefault()
+  const item = event.dataTransfer?.files?.[0]
+  const path = item?.path || item?.webkitRelativePath || item?.name
+  if(path) setInput(path, '已拖入来源')
+}
 
 async function start(){
   if(!canStart.value) return
@@ -60,7 +75,11 @@ async function start(){
 onMounted(async () => {
   form.workers = await api.DefaultWorkers()
   info.value = await api.RuntimeInfo().catch(()=>({}))
+  converter.value = await api.ConverterStatus().catch(e => ({ available: false, message: e?.message || String(e) }))
+  if(converter.value.available) pushLog(`检测到转换器：${converter.value.name} ${converter.value.path || ''}`)
+  else pushLog(`未检测到转换器：${converter.value.message}`)
   if(window.runtime?.EventsOn){
+    EventsOn('source:dropped', path => setInput(path, '已拖入来源'))
     EventsOn('conversion:progress', p => { progress.value = p; pushLog(p.message) })
     EventsOn('conversion:error', msg => { error.value = msg; running.value = false; pushLog('错误：' + msg) })
     EventsOn('conversion:done', res => { result.value = res; running.value = false; pushLog('转换完成') })
@@ -82,7 +101,11 @@ onMounted(async () => {
     <section class="grid">
       <div class="card controls">
         <h2>1. 选择来源</h2>
-        <div class="path-box" :class="{empty: !form.input}">{{ form.input || '还没有选择文件或文件夹' }}</div>
+        <div class="drop-zone" :class="{empty: !form.input, dragging}" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop="onBrowserDrop">
+          <div class="drop-icon">↧</div>
+          <div class="path-box" :class="{empty: !form.input}">{{ form.input || '把 HEIC 文件或文件夹拖到这里，也可以点击下面按钮选择' }}</div>
+          <p>支持拖拽文件 / 文件夹作为转换来源</p>
+        </div>
         <div class="button-row">
           <button @click="pickFile" :disabled="running">选择 HEIC 文件</button>
           <button class="secondary" @click="pickFolder" :disabled="running">选择文件夹</button>
@@ -98,6 +121,12 @@ onMounted(async () => {
         </div>
         <label>并发线程</label>
         <input class="number" type="number" min="1" max="16" v-model.number="form.workers" :disabled="running" />
+
+        <div class="converter-status" :class="{ok: converter.available, bad: !converter.available}">
+          <strong>{{ converter.available ? '转换器可用' : '未检测到转换器' }}</strong>
+          <span>{{ converter.available ? `${converter.name} ${converter.path || ''}` : converter.message }}</span>
+          <pre v-if="!converter.available && converter.help">{{ converter.help }}</pre>
+        </div>
 
         <button class="start" @click="start" :disabled="!canStart">{{ running ? '转换中...' : '开始转换' }}</button>
       </div>
