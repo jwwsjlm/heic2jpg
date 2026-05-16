@@ -69,7 +69,7 @@ func (s *successList) items() []string {
 
 var stdinReader = bufio.NewReader(os.Stdin)
 
-func main() {
+func runCLI() {
 	cfg, err := parseFlags()
 	if err != nil {
 		log.Fatalf("参数错误: %v", err)
