@@ -46,6 +46,7 @@ jobs:
   cli:
     name: Build CLI ${{ matrix.goos }}-${{ matrix.goarch }}
     needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -113,6 +114,7 @@ jobs:
   wails:
     name: Build GUI ${{ matrix.platform.name }}
     needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
