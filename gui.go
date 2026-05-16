@@ -23,7 +23,8 @@ import (
 var assets embed.FS
 
 type App struct {
-	ctx context.Context
+	ctx        context.Context
+	converting atomic.Bool
 }
 
 type ConvertRequest struct {
@@ -125,6 +126,11 @@ func (a *App) DefaultWorkers() int { return defaultWorkerCount() }
 func (a *App) ConverterStatus() ConverterStatus { return converterStatus() }
 
 func (a *App) StartConversion(req ConvertRequest) (*ConvertResult, error) {
+	if !a.converting.CompareAndSwap(false, true) {
+		return nil, fmt.Errorf("已有转换任务正在运行，请等待完成")
+	}
+	defer a.converting.Store(false)
+
 	if req.Level == 0 {
 		req.Level = 10
 	}
@@ -182,6 +188,9 @@ func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertRe
 	jobCh := make(chan job)
 	doneCh := make(chan struct{})
 
+	if onProgress == nil {
+		onProgress = func(ConvertProgress) {}
+	}
 	emit := func(message string) {
 		found, ok, skipped, failed := foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load()
 		done := ok + skipped + failed
@@ -190,9 +199,6 @@ func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertRe
 			percent = int(done * 100 / found)
 		}
 		onProgress(ConvertProgress{Found: found, Done: done, Success: ok, Skipped: skipped, Failed: failed, Percent: percent, Message: message})
-	}
-	if onProgress == nil {
-		onProgress = func(ConvertProgress) {}
 	}
 	emit("准备转换")
 

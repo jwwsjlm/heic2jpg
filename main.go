@@ -642,7 +642,7 @@ func detectConverter() (*converter, error) {
 			name: "libheif-tools",
 			path: path,
 			run: func(src, dst string, opt jpgOptions) error {
-				cmd := exec.Command("heif-convert", "-q", fmt.Sprintf("%d", opt.quality), src, dst)
+				cmd := exec.Command(path, "-q", fmt.Sprintf("%d", opt.quality), src, dst)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("heif-convert 转换失败: %v: %s", err, strings.TrimSpace(string(out)))
@@ -657,7 +657,7 @@ func detectConverter() (*converter, error) {
 			name: "macOS sips",
 			path: path,
 			run: func(src, dst string, opt jpgOptions) error {
-				cmd := exec.Command("sips", "-s", "format", "jpeg", "-s", "formatOptions", fmt.Sprintf("%d", opt.quality), src, "--out", dst)
+				cmd := exec.Command(path, "-s", "format", "jpeg", "-s", "formatOptions", fmt.Sprintf("%d", opt.quality), src, "--out", dst)
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("sips 转换失败: %v: %s", err, strings.TrimSpace(string(out)))
