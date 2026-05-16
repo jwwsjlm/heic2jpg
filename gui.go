@@ -65,7 +65,7 @@ func main() {
 	}
 	app := &App{}
 	err := wails.Run(&options.App{
-		Title:       "HEIC 转 JPG",
+		Title:       appTitle(),
 		Width:       1120,
 		Height:      760,
 		MinWidth:    900,
@@ -244,5 +244,9 @@ func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertRe
 
 // RuntimeInfo is shown in the GUI help panel.
 func (a *App) RuntimeInfo() map[string]string {
-	return map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH}
+	return map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH, "version": appVersion(), "title": appTitle()}
+}
+
+func appTitle() string {
+	return "HEIC 转 JPG " + displayVersion()
 }

@@ -12,22 +12,26 @@ on:
 permissions:
   contents: write
 
+env:
+  APP_NAME: heic2jpg
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod
           cache: true
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install frontend dependencies
@@ -50,27 +54,31 @@ jobs:
           - goos: windows
             goarch: amd64
             ext: .exe
+            package: zip
           - goos: linux
             goarch: amd64
             ext: ''
+            package: tar
           - goos: darwin
             goarch: amd64
             ext: ''
+            package: tar
           - goos: darwin
             goarch: arm64
             ext: ''
+            package: tar
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod
           cache: true
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Build frontend assets for embed
@@ -83,19 +91,20 @@ jobs:
           CGO_ENABLED: 0
         run: |
           mkdir -p dist
-          go build -trimpath -tags cli -ldflags "-s -w" -o "dist/heic2jpg-cli-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" .
+          go build -trimpath -tags cli -ldflags "-s -w -X main.version=${VERSION}" -o "dist/${APP_NAME}-cli-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" .
       - name: Package CLI
         run: |
           cd dist
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip "heic2jpg-cli-${{ matrix.goos }}-${{ matrix.goarch }}.zip" "heic2jpg-cli-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          base="${APP_NAME}-cli-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.package }}" = "zip" ]; then
+            zip "${base}.zip" "${base}${{ matrix.ext }}"
           else
-            tar -czf "heic2jpg-cli-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" "heic2jpg-cli-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+            tar -czf "${base}.tar.gz" "${base}${{ matrix.ext }}"
           fi
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
-          name: heic2jpg-cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: ${{ env.APP_NAME }}-cli-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/*.zip
             dist/*.tar.gz
@@ -112,24 +121,27 @@ jobs:
           - name: windows-amd64
             os: windows-latest
             package: zip
+            target: windows/amd64
           - name: macos-universal
             os: macos-latest
             package: tar
+            target: darwin/universal
           - name: linux-amd64
             os: ubuntu-latest
             package: tar
+            target: linux/amd64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod
           cache: true
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install Linux Wails dependencies
@@ -138,31 +150,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Build GUI app
         shell: bash
         run: |
           export PATH="$HOME/go/bin:$PATH"
-          if [ "${{ matrix.platform.name }}" = "macos-universal" ]; then
-            wails build -platform darwin/universal -clean
-          elif [ "${{ matrix.platform.name }}" = "windows-amd64" ]; then
-            wails build -platform windows/amd64 -clean
+          ldflags="-s -w -X main.version=${VERSION}"
+          output="${APP_NAME}-gui-${VERSION}-${{ matrix.platform.name }}"
+          if [ "${{ matrix.platform.name }}" = "linux-amd64" ]; then
+            wails build -platform "${{ matrix.platform.target }}" -tags webkit2_41 -ldflags "$ldflags" -o "$output" -clean
           else
-            wails build -platform linux/amd64 -tags webkit2_41 -clean
+            wails build -platform "${{ matrix.platform.target }}" -ldflags "$ldflags" -o "$output" -clean
           fi
       - name: Package GUI
         shell: bash
         run: |
           mkdir -p release
+          base="${APP_NAME}-gui-${VERSION}-${{ matrix.platform.name }}"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            powershell -NoProfile -Command "Compress-Archive -Path build/bin/* -DestinationPath release/heic2jpg-gui-${{ matrix.platform.name }}.zip -Force"
+            powershell -NoProfile -Command "Compress-Archive -Path build/bin/* -DestinationPath release/${base}.zip -Force"
           else
-            tar -czf "release/heic2jpg-gui-${{ matrix.platform.name }}.tar.gz" -C build/bin .
+            tar -czf "release/${base}.tar.gz" -C build/bin .
           fi
       - name: Upload GUI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
-          name: heic2jpg-gui-${{ matrix.platform.name }}
+          name: ${{ env.APP_NAME }}-gui-${{ env.VERSION }}-${{ matrix.platform.name }}
           path: release/*
           if-no-files-found: error
 
@@ -173,12 +186,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           path: dist
           merge-multiple: true
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.0
         with:
           files: dist/*
           generate_release_notes: true

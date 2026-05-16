@@ -67,7 +67,26 @@ func (s *successList) items() []string {
 	return out
 }
 
-var stdinReader = bufio.NewReader(os.Stdin)
+var (
+	stdinReader = bufio.NewReader(os.Stdin)
+	version     = "dev"
+)
+
+func appVersion() string {
+	v := strings.TrimSpace(version)
+	if v == "" || v == "dev" {
+		return "dev"
+	}
+	return strings.TrimPrefix(v, "v")
+}
+
+func displayVersion() string {
+	v := appVersion()
+	if v == "dev" {
+		return "dev"
+	}
+	return "v" + v
+}
 
 func runCLI() {
 	cfg, err := parseFlags()
@@ -279,6 +298,7 @@ func (f *failureList) items() []string {
 
 func parseFlags() (*config, error) {
 	cfg := &config{}
+	showVersion := flag.Bool("version", false, "显示版本号")
 	flag.StringVar(&cfg.input, "input", "", "输入文件或目录")
 	flag.BoolVar(&cfg.recursive, "recursive", true, "输入为目录时是否递归扫描")
 	flag.BoolVar(&cfg.overwrite, "overwrite", false, "是否覆盖已存在 jpg")
@@ -286,6 +306,10 @@ func parseFlags() (*config, error) {
 	flag.IntVar(&cfg.level, "level", 10, "转换等级，1-10；10 为最高质量/近似无损")
 	flag.IntVar(&cfg.workers, "workers", 0, "并发线程数；默认 0 表示自动使用 CPU 核心数")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("heic2jpg", displayVersion())
+		os.Exit(0)
+	}
 
 	if cfg.input == "" && flag.NArg() > 0 {
 		cfg.input = flag.Arg(0)
