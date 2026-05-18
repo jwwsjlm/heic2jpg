@@ -29,6 +29,26 @@ const qualityText = computed(() => ({
 }[form.level] || '最高质量'))
 const canStart = computed(() => Boolean(form.input && !running.value))
 const versionLabel = computed(() => info.value.version ? `v${String(info.value.version).replace(/^v/, '')}` : 'dev')
+const progressPercent = computed(() => Math.max(0, Math.min(100, Number(progress.value.percent || 0))))
+const sourceName = computed(() => {
+  if(!form.input) return '尚未选择来源'
+  const normalized = String(form.input).replaceAll('\\', '/')
+  return normalized.split('/').filter(Boolean).pop() || form.input
+})
+const taskState = computed(() => {
+  if(running.value) return '正在转换'
+  if(result.value) return '已完成'
+  if(error.value) return '需要处理'
+  if(form.input) return '已就绪'
+  return '等待来源'
+})
+const metrics = computed(() => [
+  { label: '发现', value: progress.value.found, tone: 'neutral' },
+  { label: '已处理', value: progress.value.done, tone: 'blue' },
+  { label: '成功', value: progress.value.success, tone: 'green' },
+  { label: '跳过', value: progress.value.skipped, tone: 'amber' },
+  { label: '失败', value: progress.value.failed, tone: 'red' },
+])
 
 function pushLog(text){
   if(!text) return
@@ -50,6 +70,15 @@ function onBrowserDrop(event){
   const item = event.dataTransfer?.files?.[0]
   const path = item?.path || item?.webkitRelativePath || item?.name
   if(path) setInput(path, '已拖入来源')
+}
+function clearInput(){
+  if(running.value) return
+  form.input = ''
+  pushLog('已清除来源')
+}
+function adjustWorkers(delta){
+  const next = Number(form.workers || 1) + delta
+  form.workers = Math.max(1, Math.min(16, next))
 }
 
 async function start(){
@@ -88,76 +117,151 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="shell">
-    <section class="hero card">
-      <div>
-        <p class="eyebrow">HEIC2JPG Desktop <span class="version-pill">{{ versionLabel }}</span></p>
-        <h1>把 iPhone HEIC 批量转成 JPG</h1>
-        <p class="sub">选择文件或文件夹，设置画质，点击开始。默认保留原文件；如果要清理原图，会先移动到备份目录。</p>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">HJ</div>
+        <div>
+          <p class="kicker">HEIC2JPG Desktop</p>
+          <h1>HEIC 转 JPG</h1>
+        </div>
       </div>
-      <div class="hero-badge"><span>{{ info.os || 'desktop' }}</span><b>{{ info.arch }}</b><em>{{ versionLabel }}</em></div>
-    </section>
+      <div class="top-meta" aria-label="应用状态">
+        <span class="status-chip" :class="{ ready: converter.available }">
+          <i aria-hidden="true"></i>{{ converter.available ? '转换器已就绪' : '等待转换器' }}
+        </span>
+        <span>{{ info.os || 'desktop' }} {{ info.arch }}</span>
+        <span>{{ versionLabel }}</span>
+      </div>
+    </header>
 
-    <section class="grid">
-      <div class="card controls">
-        <h2>1. 选择来源</h2>
-        <div class="drop-zone" :class="{empty: !form.input, dragging}" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop="onBrowserDrop">
-          <div class="drop-icon">↧</div>
-          <div class="path-box" :class="{empty: !form.input}">{{ form.input || '把 HEIC 文件或文件夹拖到这里，也可以点击下面按钮选择' }}</div>
-          <p>支持拖拽文件 / 文件夹作为转换来源</p>
-        </div>
-        <div class="button-row">
-          <button @click="pickFile" :disabled="running">选择 HEIC 文件</button>
-          <button class="secondary" @click="pickFolder" :disabled="running">选择文件夹</button>
+    <section class="workspace">
+      <aside class="panel control-panel">
+        <div class="panel-heading">
+          <p class="kicker">Input</p>
+          <h2>选择来源</h2>
         </div>
 
-        <h2>2. 转换设置</h2>
-        <label>画质等级：{{ form.level }} / 10 <small>{{ qualityText }}</small></label>
-        <input type="range" min="1" max="10" v-model.number="form.level" :disabled="running" />
-        <div class="setting-row">
-          <label class="toggle"><input type="checkbox" v-model="form.recursive" :disabled="running" /> 递归扫描子文件夹</label>
-          <label class="toggle"><input type="checkbox" v-model="form.overwrite" :disabled="running" /> 覆盖已存在 JPG</label>
-          <label class="toggle danger"><input type="checkbox" v-model="form.deleteOriginal" :disabled="running" /> 成功后移动原 HEIC 到备份目录</label>
+        <div class="drop-target" :class="{ populated: form.input, dragging }" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop="onBrowserDrop">
+          <div class="drop-glyph" aria-hidden="true"></div>
+          <p class="drop-title">{{ form.input ? sourceName : '拖入 HEIC 文件或文件夹' }}</p>
+          <p class="drop-copy">{{ form.input || '支持 HEIC / HEIF 文件和文件夹，也可以用下方按钮选择。' }}</p>
         </div>
-        <label>并发线程</label>
-        <input class="number" type="number" min="1" max="16" v-model.number="form.workers" :disabled="running" />
 
-        <div class="converter-status" :class="{ok: converter.available, bad: !converter.available}">
+        <div class="button-grid">
+          <button class="button primary" @click="pickFile" :disabled="running">选择文件</button>
+          <button class="button secondary" @click="pickFolder" :disabled="running">选择文件夹</button>
+          <button class="button ghost" @click="clearInput" :disabled="running || !form.input">清除来源</button>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <div class="panel-heading compact">
+          <p class="kicker">Settings</p>
+          <h2>转换设置</h2>
+        </div>
+
+        <div class="quality-control">
+          <div class="field-top">
+            <label for="quality">画质等级</label>
+            <output for="quality">{{ form.level }} / 10</output>
+          </div>
+          <input id="quality" type="range" min="1" max="10" v-model.number="form.level" :disabled="running" />
+          <div class="range-legend">
+            <span>小体积</span>
+            <strong>{{ qualityText }}</strong>
+            <span>高画质</span>
+          </div>
+        </div>
+
+        <div class="option-list">
+          <label class="switch-row">
+            <input type="checkbox" v-model="form.recursive" :disabled="running" />
+            <span class="switch" aria-hidden="true"></span>
+            <span><strong>递归扫描</strong><small>包含子文件夹中的 HEIC / HEIF</small></span>
+          </label>
+          <label class="switch-row">
+            <input type="checkbox" v-model="form.overwrite" :disabled="running" />
+            <span class="switch" aria-hidden="true"></span>
+            <span><strong>覆盖 JPG</strong><small>同名 JPG 存在时重新生成</small></span>
+          </label>
+          <label class="switch-row caution">
+            <input type="checkbox" v-model="form.deleteOriginal" :disabled="running" />
+            <span class="switch" aria-hidden="true"></span>
+            <span><strong>备份原图</strong><small>成功后移动原 HEIC 到备份目录</small></span>
+          </label>
+        </div>
+
+        <div class="worker-field">
+          <div>
+            <label for="workers">并发线程</label>
+            <small>默认按 CPU 自动建议，可手动调整</small>
+          </div>
+          <div class="stepper">
+            <button type="button" @click="adjustWorkers(-1)" :disabled="running" title="减少线程">-</button>
+            <input id="workers" type="number" min="1" max="16" v-model.number="form.workers" :disabled="running" />
+            <button type="button" @click="adjustWorkers(1)" :disabled="running" title="增加线程">+</button>
+          </div>
+        </div>
+
+        <div class="converter-panel" :class="{ ok: converter.available, warn: !converter.available }">
           <strong>{{ converter.available ? '转换器可用' : '未检测到转换器' }}</strong>
           <span>{{ converter.available ? `${converter.name} ${converter.path || ''}` : converter.message }}</span>
           <pre v-if="!converter.available && converter.help">{{ converter.help }}</pre>
         </div>
 
-        <button class="start" @click="start" :disabled="!canStart">{{ running ? '转换中...' : '开始转换' }}</button>
-      </div>
+        <button class="start-button" @click="start" :disabled="!canStart">{{ running ? '转换中...' : '开始转换' }}</button>
+      </aside>
 
-      <div class="card progress-card">
-        <div class="progress-head">
-          <div><p class="eyebrow">Progress</p><h2>{{ progress.message }}</h2></div>
-          <strong>{{ progress.percent }}%</strong>
-        </div>
-        <div class="bar"><i :style="{width: progress.percent + '%'}"></i></div>
-        <div class="stats">
-          <div><span>发现</span><b>{{ progress.found }}</b></div>
-          <div><span>已处理</span><b>{{ progress.done }}</b></div>
-          <div><span>成功</span><b>{{ progress.success }}</b></div>
-          <div><span>跳过</span><b>{{ progress.skipped }}</b></div>
-          <div><span>失败</span><b>{{ progress.failed }}</b></div>
-        </div>
+      <section class="main-stack">
+        <section class="panel progress-panel">
+          <div class="progress-overview">
+            <div>
+              <p class="kicker">Progress</p>
+              <h2>{{ progress.message }}</h2>
+              <p>{{ taskState }}，{{ form.input ? `来源：${sourceName}` : '请选择文件或文件夹开始。' }}</p>
+            </div>
+            <div class="progress-dial" :style="{ '--value': progressPercent + '%' }" aria-label="转换进度">
+              <strong>{{ progressPercent }}%</strong>
+            </div>
+          </div>
+          <div class="progress-track"><i :style="{ width: progressPercent + '%' }"></i></div>
+          <div class="metric-grid">
+            <article v-for="item in metrics" :key="item.label" class="metric" :class="item.tone">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </article>
+          </div>
+        </section>
 
-        <div v-if="result" class="result success">
-          <h3>转换完成</h3>
-          <p>总数 {{ result.found }}，成功 {{ result.success }}，跳过 {{ result.skipped }}，失败 {{ result.failed }}，耗时 {{ result.duration }}。</p>
-          <p v-if="result.backupDir">原 HEIC 已移动到：{{ result.backupDir }}</p>
-        </div>
-        <div v-if="error" class="result error"><h3>需要处理</h3><p>{{ error }}</p></div>
+        <section v-if="result || error" class="panel result-panel" :class="{ failed: error, done: result && !error }">
+          <div v-if="result">
+            <p class="kicker">Result</p>
+            <h3>转换完成</h3>
+            <p>总数 {{ result.found }}，成功 {{ result.success }}，跳过 {{ result.skipped }}，失败 {{ result.failed }}，耗时 {{ result.duration }}。</p>
+            <p v-if="result.backupDir">原 HEIC 已移动到：{{ result.backupDir }}</p>
+          </div>
+          <div v-if="error">
+            <p class="kicker">Attention</p>
+            <h3>需要处理</h3>
+            <p>{{ error }}</p>
+          </div>
+        </section>
 
-        <div class="log">
-          <h3>运行记录</h3>
-          <p v-if="!log.length" class="muted">开始后会显示扫描和转换进度。</p>
-          <p v-for="line in log" :key="line">{{ line }}</p>
-        </div>
-      </div>
+        <section class="panel log-panel">
+          <div class="log-heading">
+            <div>
+              <p class="kicker">Activity</p>
+              <h2>运行记录</h2>
+            </div>
+            <span>{{ log.length }} 条</span>
+          </div>
+          <div class="log-list" aria-live="polite">
+            <p v-if="!log.length" class="muted">开始后会显示扫描、转换和错误信息。</p>
+            <p v-for="line in log" :key="line">{{ line }}</p>
+          </div>
+        </section>
+      </section>
     </section>
   </main>
 </template>

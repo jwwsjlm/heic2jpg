@@ -9,6 +9,10 @@
 /tmp/
 /heic2jpg-cli
 /heic2jpg-gui
+/heic2jpg.exe
+
+# IDE / local workspace noise
+.idea/
 
 # Local Wails/frontend cache
 frontend/node_modules/
