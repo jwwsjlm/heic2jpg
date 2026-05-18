@@ -376,19 +376,23 @@ input[type="range"] {
 .option-list {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .switch-row {
+  position: relative;
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   min-height: 58px;
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid #dde3ea;
   border-radius: 8px;
   background: #ffffff;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .switch-row.caution {
@@ -398,12 +402,19 @@ input[type="range"] {
 
 .switch-row input {
   position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
   opacity: 0;
   pointer-events: none;
+  white-space: nowrap;
 }
 
 .switch {
   position: relative;
+  display: block;
   width: 42px;
   height: 24px;
   border-radius: 999px;
@@ -440,6 +451,12 @@ input[type="range"] {
 .switch-row strong,
 .switch-row small {
   display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.switch-row > span:last-child {
+  min-width: 0;
 }
 
 .switch-row strong {
