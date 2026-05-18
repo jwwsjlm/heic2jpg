@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
       - name: Setup Go
         uses: actions/setup-go@v6.4.0
         with:
@@ -71,6 +73,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
       - name: Setup Go
         uses: actions/setup-go@v6.4.0
         with:
@@ -135,6 +139,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
       - name: Setup Go
         uses: actions/setup-go@v6.4.0
         with:
