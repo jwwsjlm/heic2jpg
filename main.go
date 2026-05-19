@@ -115,9 +115,7 @@ func runCLI() {
 	if workerCount <= 0 {
 		workerCount = defaultWorkerCount()
 	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
+	workerCount = sanitizeWorkerCount(workerCount)
 
 	fmt.Println("------------------------------")
 	fmt.Printf("转换器: %s\n", conv.name)
@@ -756,6 +754,16 @@ func defaultWorkerCount() int {
 	}
 	if workers < 1 {
 		workers = 1
+	}
+	return workers
+}
+
+func sanitizeWorkerCount(workers int) int {
+	if workers < 1 {
+		return 1
+	}
+	if workers > 16 {
+		return 16
 	}
 	return workers
 }

@@ -110,8 +110,6 @@ onMounted(async () => {
   if(window.runtime?.EventsOn){
     EventsOn('source:dropped', path => setInput(path, '已拖入来源'))
     EventsOn('conversion:progress', p => { progress.value = p; pushLog(p.message) })
-    EventsOn('conversion:error', msg => { error.value = msg; running.value = false; pushLog('错误：' + msg) })
-    EventsOn('conversion:done', res => { result.value = res; running.value = false; pushLog('转换完成') })
   }
 })
 </script>

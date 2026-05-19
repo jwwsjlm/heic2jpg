@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -137,20 +138,19 @@ func (a *App) StartConversion(req ConvertRequest) (*ConvertResult, error) {
 	if req.Workers == 0 {
 		req.Workers = defaultWorkerCount()
 	}
-	cfg := &config{input: req.Input, recursive: req.Recursive, overwrite: req.Overwrite, deleteOriginal: req.DeleteOriginal, level: req.Level, workers: req.Workers}
-	result, err := runGUIConversion(cfg, func(p ConvertProgress) {
+	cfg := &config{
+		input:          req.Input,
+		recursive:      req.Recursive,
+		overwrite:      req.Overwrite,
+		deleteOriginal: req.DeleteOriginal,
+		level:          req.Level,
+		workers:        req.Workers,
+	}
+	return runGUIConversion(cfg, func(p ConvertProgress) {
 		if a.ctx != nil {
 			wailsruntime.EventsEmit(a.ctx, "conversion:progress", p)
 		}
 	})
-	if a.ctx != nil {
-		if err != nil {
-			wailsruntime.EventsEmit(a.ctx, "conversion:error", err.Error())
-		} else {
-			wailsruntime.EventsEmit(a.ctx, "conversion:done", result)
-		}
-	}
-	return result, err
 }
 
 func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertResult, error) {
@@ -172,9 +172,7 @@ func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertRe
 	if cfg.workers <= 0 {
 		cfg.workers = defaultWorkerCount()
 	}
-	if cfg.workers < 1 {
-		cfg.workers = 1
-	}
+	cfg.workers = sanitizeWorkerCount(cfg.workers)
 
 	opt := levelToJPGOptions(cfg.level)
 	conv, err := detectConverter()
@@ -185,78 +183,114 @@ func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertRe
 	var foundCount, okCount, skipCount, failCount atomic.Int64
 	successes := newSuccessList()
 	failures := newFailureList()
-	jobCh := make(chan job)
-	doneCh := make(chan struct{})
+	jobCh := make(chan job, cfg.workers*2)
+	var wg sync.WaitGroup
 
 	if onProgress == nil {
 		onProgress = func(ConvertProgress) {}
 	}
-	emit := func(message string) {
+	emit := newProgressEmitter(onProgress, &foundCount, &okCount, &skipCount, &failCount)
+	emit("准备转换", true)
+
+	for i := 0; i < cfg.workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobCh {
+				if !cfg.overwrite {
+					if _, err := os.Stat(j.dst); err == nil {
+						skipCount.Add(1)
+						emit("已跳过存在的 JPG", false)
+						continue
+					}
+				}
+
+				if err := conv.run(j.src, j.dst, opt); err != nil {
+					failCount.Add(1)
+					failures.add(fmt.Sprintf("%s -> %v", j.src, err))
+					emit("转换失败", true)
+					continue
+				}
+				if err := preserveFileTimes(j.src, j.dst); err != nil {
+					failCount.Add(1)
+					failures.add(fmt.Sprintf("%s -> JPG 已生成，但同步文件修改时间失败: %v", j.src, err))
+					emit("同步文件时间失败", true)
+					continue
+				}
+
+				successes.add(j.src)
+				okCount.Add(1)
+				emit("转换中", false)
+			}
+		}()
+	}
+
+	if err := streamHEICJobs(cfg.input, cfg.recursive, func(j job) {
+		foundCount.Add(1)
+		emit("扫描到 HEIC/HEIF", false)
+		jobCh <- j
+	}); err != nil {
+		close(jobCh)
+		wg.Wait()
+		return nil, fmt.Errorf("扫描输入失败: %w", err)
+	}
+	close(jobCh)
+	wg.Wait()
+
+	if foundCount.Load() == 0 {
+		return nil, fmt.Errorf("没有找到 HEIC/HEIF 文件: %s", cfg.input)
+	}
+
+	res := &ConvertResult{
+		Converter: conv.name,
+		Found:     foundCount.Load(),
+		Success:   okCount.Load(),
+		Skipped:   skipCount.Load(),
+		Failed:    failCount.Load(),
+		Failures:  failures.items(),
+		Duration:  time.Since(started).Round(time.Second).String(),
+	}
+	if cfg.deleteOriginal && okCount.Load() > 0 {
+		emit("正在备份原图", true)
+		moved, moveFailures, backupDir := backupOriginals(successes.items(), cfg.input)
+		res.Moved, res.MoveFailures, res.BackupDir = moved, moveFailures, backupDir
+	}
+	emit("转换完成", true)
+	if res.Failed > 0 || len(res.MoveFailures) > 0 {
+		return res, fmt.Errorf("转换完成，但有 %d 个失败", res.Failed+int64(len(res.MoveFailures)))
+	}
+	return res, nil
+}
+
+func newProgressEmitter(onProgress func(ConvertProgress), foundCount, okCount, skipCount, failCount *atomic.Int64) func(string, bool) {
+	var mu sync.Mutex
+	lastEmit := time.Time{}
+	return func(message string, force bool) {
 		found, ok, skipped, failed := foundCount.Load(), okCount.Load(), skipCount.Load(), failCount.Load()
 		done := ok + skipped + failed
 		percent := 0
 		if found > 0 {
 			percent = int(done * 100 / found)
 		}
-		onProgress(ConvertProgress{Found: found, Done: done, Success: ok, Skipped: skipped, Failed: failed, Percent: percent, Message: message})
-	}
-	emit("准备转换")
 
-	for i := 0; i < cfg.workers; i++ {
-		go func() {
-			for j := range jobCh {
-				if !cfg.overwrite {
-					if _, err := os.Stat(j.dst); err == nil {
-						skipCount.Add(1)
-						emit("已跳过存在的 JPG")
-						continue
-					}
-				}
-				if err := conv.run(j.src, j.dst, opt); err != nil {
-					failCount.Add(1)
-					failures.add(fmt.Sprintf("%s -> %v", j.src, err))
-					emit("转换失败")
-					continue
-				}
-				if err := preserveFileTimes(j.src, j.dst); err != nil {
-					failCount.Add(1)
-					failures.add(fmt.Sprintf("%s -> JPG 已生成，但同步文件修改时间失败: %v", j.src, err))
-					emit("同步文件时间失败")
-					continue
-				}
-				successes.add(j.src)
-				okCount.Add(1)
-				emit("转换中")
-			}
-			doneCh <- struct{}{}
-		}()
-	}
-
-	if err := streamHEICJobs(cfg.input, cfg.recursive, func(j job) { foundCount.Add(1); emit("扫描到 HEIC/HEIF"); jobCh <- j }); err != nil {
-		close(jobCh)
-		for i := 0; i < cfg.workers; i++ {
-			<-doneCh
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now()
+		if !force && now.Sub(lastEmit) < 200*time.Millisecond {
+			return
 		}
-		return nil, fmt.Errorf("扫描输入失败: %w", err)
-	}
-	close(jobCh)
-	for i := 0; i < cfg.workers; i++ {
-		<-doneCh
-	}
-	if foundCount.Load() == 0 {
-		return nil, fmt.Errorf("没有找到 HEIC/HEIF 文件: %s", cfg.input)
-	}
+		lastEmit = now
 
-	res := &ConvertResult{Converter: conv.name, Found: foundCount.Load(), Success: okCount.Load(), Skipped: skipCount.Load(), Failed: failCount.Load(), Failures: failures.items(), Duration: time.Since(started).Round(time.Second).String()}
-	if cfg.deleteOriginal && okCount.Load() > 0 {
-		moved, moveFailures, backupDir := backupOriginals(successes.items(), cfg.input)
-		res.Moved, res.MoveFailures, res.BackupDir = moved, moveFailures, backupDir
+		onProgress(ConvertProgress{
+			Found:   found,
+			Done:    done,
+			Success: ok,
+			Skipped: skipped,
+			Failed:  failed,
+			Percent: percent,
+			Message: message,
+		})
 	}
-	emit("转换完成")
-	if res.Failed > 0 || len(res.MoveFailures) > 0 {
-		return res, fmt.Errorf("转换完成，但有 %d 个失败", res.Failed+int64(len(res.MoveFailures)))
-	}
-	return res, nil
 }
 
 // RuntimeInfo is shown in the GUI help panel.
