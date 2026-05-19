@@ -125,7 +125,7 @@ jobs:
       matrix:
         platform:
           - name: windows-amd64
-            os: windows-latest
+            os: windows-2022
             package: zip
             target: windows/amd64
           - name: macos-universal
