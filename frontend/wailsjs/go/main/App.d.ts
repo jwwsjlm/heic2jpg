@@ -12,4 +12,7 @@ export function SelectFile():Promise<string>;
 
 export function SelectFolder():Promise<string>;
 
+
+export function ValidateInput(arg1:string):Promise<string>;
+
 export function StartConversion(arg1:main.ConvertRequest):Promise<main.ConvertResult>;

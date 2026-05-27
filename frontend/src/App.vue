@@ -9,6 +9,7 @@ const fallback = {
   async DefaultWorkers(){ return Math.min(4, navigator.hardwareConcurrency || 4) },
   async RuntimeInfo(){ return { os: 'browser-preview', arch: '', version: 'dev', title: 'HEIC2JPG' } },
   async ConverterStatus(){ return { available: false, message: '浏览器预览无法检测本机转换器', help: '请运行 Wails 桌面应用检测 ImageMagick / libheif-tools / sips。' } },
+  async ValidateInput(path){ return String(path || '').trim() },
   async StartConversion(){ throw new Error('浏览器预览不能直接转换，请运行 Wails 应用。') }
 }
 
@@ -58,28 +59,35 @@ function pushLog(text){
   log.value = log.value.slice(0, 80)
 }
 
-async function pickFile(){ const p = await api.SelectFile(); if(p) setInput(p, '已选择文件') }
-async function pickFolder(){ const p = await api.SelectFolder(); if(p) setInput(p, '已选择文件夹') }
-function setInput(path, source = '已选择来源'){
+async function pickFile(){ const p = await api.SelectFile(); if(p) await setInput(p, '已选择文件') }
+async function pickFolder(){ const p = await api.SelectFolder(); if(p) await setInput(p, '已选择文件夹') }
+async function setInput(path, source = '已选择来源'){
   const normalized = typeof path === 'string' ? path.trim() : ''
-  if(!normalized) return
-  form.input = normalized
-  pushLog(`${source}：${normalized}`)
-}
-function isAbsoluteFilesystemPath(path){
-  return typeof path === 'string' && (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('/'))
+  if(!normalized) return false
+  try{
+    const resolved = await api.ValidateInput(normalized)
+    form.input = resolved
+    error.value = ''
+    pushLog(`${source}：${resolved}`)
+    return true
+  }catch(e){
+    const message = e?.message || String(e)
+    error.value = message
+    pushLog(`来源无效：${message}`)
+    return false
+  }
 }
 function onBrowserDrop(event){
   dragging.value = false
   event.preventDefault()
-  const item = event.dataTransfer?.files?.[0]
-  const path = typeof (item?.path || item?.webkitRelativePath || '') === 'string'
-    ? String(item?.path || item?.webkitRelativePath || '').trim()
-    : ''
-  if(isDesktopApp && !isAbsoluteFilesystemPath(path)){
+  if(isDesktopApp){
     pushLog('已接收拖拽，正在读取本地路径…')
     return
   }
+  const item = event.dataTransfer?.files?.[0]
+  const path = typeof (item?.path || item?.webkitRelativePath || item?.name || '') === 'string'
+    ? String(item?.path || item?.webkitRelativePath || item?.name || '').trim()
+    : ''
   if(path) setInput(path, '已拖入来源')
 }
 function clearInput(){
@@ -119,7 +127,7 @@ onMounted(async () => {
   if(converter.value.available) pushLog(`检测到转换器：${converter.value.name} ${converter.value.path || ''}`)
   else pushLog(`未检测到转换器：${converter.value.message}`)
   if(window.runtime?.EventsOn){
-    EventsOn('source:dropped', path => setInput(path, '已拖入来源'))
+    EventsOn('source:dropped', path => { setInput(path, '已拖入来源') })
     EventsOn('conversion:progress', p => { progress.value = p; pushLog(p.message) })
   }
 })

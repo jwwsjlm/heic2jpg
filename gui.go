@@ -126,6 +126,10 @@ func (a *App) DefaultWorkers() int { return defaultWorkerCount() }
 
 func (a *App) ConverterStatus() ConverterStatus { return converterStatus() }
 
+func (a *App) ValidateInput(input string) (string, error) {
+	return validateInputPath(input)
+}
+
 func (a *App) StartConversion(req ConvertRequest) (*ConvertResult, error) {
 	if !a.converting.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("已有转换任务正在运行，请等待完成")
@@ -158,13 +162,7 @@ func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertRe
 	if cfg == nil {
 		return nil, fmt.Errorf("缺少转换配置")
 	}
-	if cfg.input == "" {
-		return nil, fmt.Errorf("请选择 HEIC/HEIF 文件或文件夹")
-	}
-	if !looksLikeFilesystemPath(cfg.input) {
-		return nil, fmt.Errorf("接收到的来源路径不完整，请使用“选择文件/文件夹”或把项目从资源管理器直接拖进窗口")
-	}
-	absInput, err := filepath.Abs(cfg.input)
+	absInput, err := validateInputPath(cfg.input)
 	if err != nil {
 		return nil, err
 	}
@@ -301,6 +299,26 @@ func (a *App) RuntimeInfo() map[string]string {
 	return map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH, "version": appVersion(), "title": appTitle()}
 }
 
+func validateInputPath(input string) (string, error) {
+	input = cleanInputPath(input)
+	if input == "" {
+		return "", fmt.Errorf("请选择 HEIC/HEIF 文件或文件夹")
+	}
+	if !looksLikeFilesystemPath(input) {
+		return "", fmt.Errorf("接收到的来源路径不完整，请重新选择文件或文件夹")
+	}
+	absInput, err := filepath.Abs(input)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(absInput); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("所选路径不存在，请重新选择：%s", absInput)
+		}
+		return "", err
+	}
+	return absInput, nil
+}
 func appTitle() string {
 	return "HEIC 转 JPG " + displayVersion()
 }

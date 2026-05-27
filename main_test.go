@@ -105,3 +105,25 @@ func TestWalkEntryError(t *testing.T) {
 		t.Fatalf("expected child error to be ignored, got %v", got)
 	}
 }
+
+func TestValidateInputPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	got, err := validateInputPath(root)
+	if err != nil {
+		t.Fatalf("validateInputPath existing dir returned error: %v", err)
+	}
+	want, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("filepath.Abs returned error: %v", err)
+	}
+	if got != want {
+		t.Fatalf("validateInputPath returned %q, want %q", got, want)
+	}
+
+	missing := filepath.Join(root, "missing")
+	if _, err := validateInputPath(missing); err == nil {
+		t.Fatal("expected missing path to be rejected")
+	}
+}

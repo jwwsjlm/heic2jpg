@@ -22,6 +22,11 @@ export function SelectFolder() {
   return window['go']['main']['App']['SelectFolder']();
 }
 
+
+export function ValidateInput(arg1) {
+  return window['go']['main']['App']['ValidateInput'](arg1);
+}
+
 export function StartConversion(arg1) {
   return window['go']['main']['App']['StartConversion'](arg1);
 }
