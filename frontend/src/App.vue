@@ -12,7 +12,8 @@ const fallback = {
   async StartConversion(){ throw new Error('浏览器预览不能直接转换，请运行 Wails 应用。') }
 }
 
-const api = window.go?.main?.App ? AppApi : fallback
+const isDesktopApp = Boolean(window.go?.main?.App)
+const api = isDesktopApp ? AppApi : fallback
 const form = reactive({ input: '', recursive: true, overwrite: false, deleteOriginal: false, level: 10, workers: 0 })
 const running = ref(false)
 const progress = ref({ found: 0, done: 0, success: 0, skipped: 0, failed: 0, percent: 0, message: '等待选择文件或文件夹' })
@@ -60,15 +61,25 @@ function pushLog(text){
 async function pickFile(){ const p = await api.SelectFile(); if(p) setInput(p, '已选择文件') }
 async function pickFolder(){ const p = await api.SelectFolder(); if(p) setInput(p, '已选择文件夹') }
 function setInput(path, source = '已选择来源'){
-  if(!path) return
-  form.input = path
-  pushLog(`${source}：${path}`)
+  const normalized = typeof path === 'string' ? path.trim() : ''
+  if(!normalized) return
+  form.input = normalized
+  pushLog(`${source}：${normalized}`)
+}
+function isAbsoluteFilesystemPath(path){
+  return typeof path === 'string' && (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('/'))
 }
 function onBrowserDrop(event){
   dragging.value = false
   event.preventDefault()
   const item = event.dataTransfer?.files?.[0]
-  const path = item?.path || item?.webkitRelativePath || item?.name
+  const path = typeof (item?.path || item?.webkitRelativePath || '') === 'string'
+    ? String(item?.path || item?.webkitRelativePath || '').trim()
+    : ''
+  if(isDesktopApp && !isAbsoluteFilesystemPath(path)){
+    pushLog('已接收拖拽，正在读取本地路径…')
+    return
+  }
   if(path) setInput(path, '已拖入来源')
 }
 function clearInput(){

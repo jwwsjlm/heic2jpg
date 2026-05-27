@@ -161,6 +161,9 @@ func runGUIConversion(cfg *config, onProgress func(ConvertProgress)) (*ConvertRe
 	if cfg.input == "" {
 		return nil, fmt.Errorf("请选择 HEIC/HEIF 文件或文件夹")
 	}
+	if !looksLikeFilesystemPath(cfg.input) {
+		return nil, fmt.Errorf("接收到的来源路径不完整，请使用“选择文件/文件夹”或把项目从资源管理器直接拖进窗口")
+	}
 	absInput, err := filepath.Abs(cfg.input)
 	if err != nil {
 		return nil, err

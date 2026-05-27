@@ -548,6 +548,30 @@ func cleanInputPath(input string) string {
 	return input
 }
 
+func looksLikeFilesystemPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if filepath.IsAbs(path) {
+		return true
+	}
+	if len(path) >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(path, `\\`)
+}
+
+func walkEntryError(root, path string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if path == root {
+		return err
+	}
+	return nil
+}
+
 func levelToJPGOptions(level int) jpgOptions {
 	// 1-10 映射到常用 JPG 质量区间。
 	// 10 使用 quality=100，并保留元数据，作为最高画质/近似无损输出。
@@ -730,7 +754,7 @@ func streamHEICJobs(input string, recursive bool, emit func(job)) error {
 
 	walkFn := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return walkEntryError(input, path, err)
 		}
 		if d.IsDir() {
 			if path != input && !recursive {
