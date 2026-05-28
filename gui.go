@@ -72,7 +72,6 @@ func main() {
 		Height:      760,
 		MinWidth:    480,
 		MinHeight:   520,
-		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},
 		AssetServer: &assetserver.Options{Assets: assets},
 		OnStartup:   app.startup,
 		Bind:        []interface{}{app},
@@ -103,12 +102,6 @@ func shouldRunCLI() bool {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	wailsruntime.OnFileDrop(ctx, func(_ int, _ int, paths []string) {
-		if len(paths) == 0 {
-			return
-		}
-		wailsruntime.EventsEmit(ctx, "source:dropped", paths[0])
-	})
 }
 
 func (a *App) SelectFile() (string, error) {
