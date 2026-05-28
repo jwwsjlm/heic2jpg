@@ -164,6 +164,9 @@ jobs:
         run: |
           export PATH="$HOME/go/bin:$PATH"
           ldflags="-s -w -X main.version=${VERSION}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ldflags="$ldflags -H windowsgui"
+          fi
           output="${APP_NAME}-gui-${VERSION}-${{ matrix.platform.name }}"
           if [ "${{ matrix.platform.name }}" = "linux-amd64" ]; then
             wails build -platform "${{ matrix.platform.target }}" -tags webkit2_41 -ldflags "$ldflags" -o "$output" -clean

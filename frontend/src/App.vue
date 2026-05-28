@@ -77,13 +77,19 @@ async function setInput(path, source = '已选择来源'){
     return false
   }
 }
+function onDropTargetDragEnter(){
+  dragging.value = true
+}
+function onDropTargetDragLeave(){
+  dragging.value = false
+}
+function onDropTargetDragOver(event){
+  if(!isDesktopApp) event.preventDefault()
+}
 function onBrowserDrop(event){
   dragging.value = false
+  if(isDesktopApp) return
   event.preventDefault()
-  if(isDesktopApp){
-    pushLog('已接收拖拽，正在读取本地路径…')
-    return
-  }
   const item = event.dataTransfer?.files?.[0]
   const path = typeof (item?.path || item?.webkitRelativePath || item?.name || '') === 'string'
     ? String(item?.path || item?.webkitRelativePath || item?.name || '').trim()
@@ -159,7 +165,7 @@ onMounted(async () => {
           <h2>选择来源</h2>
         </div>
 
-        <div class="drop-target" :class="{ populated: form.input, dragging }" @dragenter.prevent="dragging = true" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop="onBrowserDrop">
+        <div class="drop-target" :class="{ populated: form.input, dragging }" @dragenter="onDropTargetDragEnter" @dragover="onDropTargetDragOver" @dragleave="onDropTargetDragLeave" @drop="onBrowserDrop">
           <div class="drop-glyph" aria-hidden="true"></div>
           <p class="drop-title">{{ form.input ? sourceName : '拖入 HEIC 文件或文件夹' }}</p>
           <p class="drop-copy">{{ form.input || '支持 HEIC / HEIF 文件和文件夹，也可以用下方按钮选择。' }}</p>
