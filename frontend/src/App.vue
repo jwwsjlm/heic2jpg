@@ -84,12 +84,12 @@ function onDropTargetDragLeave(){
   dragging.value = false
 }
 function onDropTargetDragOver(event){
-  if(!isDesktopApp) event.preventDefault()
+  event.preventDefault()
 }
 function onBrowserDrop(event){
   dragging.value = false
-  if(isDesktopApp) return
   event.preventDefault()
+  if(isDesktopApp) return
   const item = event.dataTransfer?.files?.[0]
   const path = typeof (item?.path || item?.webkitRelativePath || item?.name || '') === 'string'
     ? String(item?.path || item?.webkitRelativePath || item?.name || '').trim()
